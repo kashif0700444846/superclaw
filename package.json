@@ -12,8 +12,8 @@
     "dev": "tsx src/index.ts",
     "setup": "tsx src/setup/wizard.ts",
     "lint": "tsc --noEmit",
-    "install:lite": "npm install --ignore-optional",
-    "install:full": "npm install"
+    "install:lite": "pnpm install",
+    "install:full": "pnpm install"
   },
   "dependencies": {
     "grammy": "^1.21.1",
@@ -44,7 +44,8 @@
     "@types/qrcode-terminal": "^0.12.2",
     "@types/node-cron": "^3.0.11",
     "ts-node": "^10.9.2",
-    "tsx": "^4.7.1"
+    "tsx": "^4.7.1",
+    "esbuild": "^0.27.3"
   },
   "engines": {
     "node": ">=20.0.0"
