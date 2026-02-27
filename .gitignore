@@ -1,0 +1,37 @@
+# Environment & secrets
+.env
+*.env
+superclaw.config.json
+
+# Node modules
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+
+# Logs
+logs/*.log
+memory/logs/
+
+# Database
+data/*.db
+data/*.sqlite
+
+# WhatsApp session (contains auth keys)
+whatsapp-session/
+whatsapp-session-baileys/
+.wwebjs_auth/
+.wwebjs_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# PM2
+.pm2/
