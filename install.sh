@@ -183,6 +183,9 @@ else
   pnpm install
 fi
 
+echo "Building native modules..."
+pnpm rebuild better-sqlite3 2>/dev/null || npm rebuild better-sqlite3 2>/dev/null || true
+
 log "Dependencies installed"
 
 # ── Run setup wizard ──────────────────────────────────────

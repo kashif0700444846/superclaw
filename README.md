@@ -119,6 +119,11 @@ The Puppeteer-based WhatsApp option is still available if you need it, but Baile
 
 ## Changelog
 
+### v2.3.0 (2026-02-28)
+- Fixed better-sqlite3 native binary compilation on Linux (no more manual pnpm approve-builds)
+- Added pnpm.onlyBuiltDependencies config to package.json for automatic native builds
+- update.sh now rebuilds native modules after pnpm install
+
 ### v2.2.0 (2026-02-28)
 - Fixed custom API provider connection test (removed max_tokens limit for better compatibility)
 - Wizard now fetches available models from /v1/models and shows a selectable list

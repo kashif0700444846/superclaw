@@ -1,6 +1,6 @@
 {
   "name": "superclaw",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Autonomous AI agent system — modular, memory-efficient",
   "main": "dist/index.js",
   "bin": {
@@ -14,6 +14,13 @@
     "lint": "tsc --noEmit",
     "install:lite": "pnpm install",
     "install:full": "pnpm install"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild",
+      "protobufjs"
+    ]
   },
   "dependencies": {
     "grammy": "^1.21.1",

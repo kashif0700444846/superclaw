@@ -32,6 +32,10 @@ echo "📦 Installing/updating dependencies..."
 pnpm install
 
 echo ""
+echo "🔨 Building native modules (better-sqlite3)..."
+cd "$INSTALL_DIR" && pnpm rebuild better-sqlite3 2>/dev/null || true
+
+echo ""
 NEW_VERSION=$(node -p "require('./package.json').version" 2>/dev/null || echo 'unknown')
 echo "✅ Updated to v$NEW_VERSION"
 echo ""
