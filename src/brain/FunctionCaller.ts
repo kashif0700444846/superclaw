@@ -21,7 +21,26 @@ export interface FunctionCallerResult {
   toolCallHistory: ToolCallRecord[];
 }
 
-const MAX_ITERATIONS = 10;
+const MAX_ITERATIONS = 50;
+
+/**
+ * Returns the maximum number of iterations allowed for a given user message.
+ * Complex multi-step tasks get the full 50-iteration budget; simple queries
+ * get a lower limit of 20 to avoid unnecessary API calls.
+ */
+function getMaxIterations(userMessage: string): number {
+  const complexKeywords = [
+    'install', 'setup', 'configure', 'build', 'deploy', 'create', 'write',
+    'implement', 'fix', 'update', 'migrate', 'refactor', 'analyze', 'scan',
+    'download', 'compile', 'test', 'run', 'execute', 'start', 'stop',
+    'delete', 'remove', 'move', 'copy', 'rename', 'generate', 'enable',
+    'disable', 'restart', 'upgrade', 'clone', 'init', 'push', 'pull',
+  ];
+  const isComplex = complexKeywords.some((kw) =>
+    new RegExp(`\\b${kw}\\b`, 'i').test(userMessage)
+  );
+  return isComplex ? MAX_ITERATIONS : 20;
+}
 
 // ---------------------------------------------------------------------------
 // Context-window overflow prevention
@@ -280,7 +299,7 @@ export class FunctionCaller {
         userId,
         toolsUsed,
         toolCallHistory,
-        MAX_ITERATIONS
+        getMaxIterations(userMessage)
       );
     } else if (config.aiProvider === 'anthropic') {
       return this.runAnthropicLoop(
@@ -288,7 +307,8 @@ export class FunctionCaller {
         history,
         userMessage,
         toolsUsed,
-        toolCallHistory
+        toolCallHistory,
+        getMaxIterations(userMessage)
       );
     } else if (config.aiProvider === 'ollama') {
       return this.runOllamaLoop(systemPrompt, history, userMessage, toolsUsed, toolCallHistory);
@@ -302,7 +322,7 @@ export class FunctionCaller {
         userId,
         toolsUsed,
         toolCallHistory,
-        MAX_ITERATIONS
+        getMaxIterations(userMessage)
       );
     }
 
@@ -468,8 +488,18 @@ export class FunctionCaller {
       }
     }
 
+    const partialSummary =
+      toolsUsed.length > 0
+        ? `Tools used so far: ${[...new Set(toolsUsed)].join(', ')}.`
+        : 'No tools were called.';
+    logger.warn(`FunctionCaller OpenAI: hard iteration cap (${maxIterations}) reached`, {
+      toolsUsed,
+      toolCallCount: toolCallHistory.length,
+    });
     return {
-      response: '⚠️ Maximum iterations reached. Task may be incomplete.',
+      response:
+        `⚠️ Task reached the iteration limit (${maxIterations} steps). The agent stopped to prevent infinite loops. ` +
+        `Here is what was completed so far: ${partialSummary}`,
       toolsUsed,
       toolsCalledCount: toolsUsed.length,
       toolCallHistory,
@@ -486,7 +516,8 @@ export class FunctionCaller {
     history: ConversationMessage[],
     userMessage: string,
     toolsUsed: string[],
-    toolCallHistory: ToolCallRecord[]
+    toolCallHistory: ToolCallRecord[],
+    maxIterations: number = MAX_ITERATIONS
   ): Promise<FunctionCallerResult> {
     if (!this.anthropicClient) {
       return {
@@ -515,7 +546,6 @@ export class FunctionCaller {
 
     conversationHistory.push({ role: 'user', content: userMessage });
 
-    const maxIterations = 10;
     const fallbacks = config.fallbackModels ?? [];
     const maxRetries = config.aiMaxRetries;
     const baseDelay = config.aiRetryDelayMs;
@@ -638,8 +668,18 @@ export class FunctionCaller {
       });
     }
 
+    const partialSummary =
+      toolsUsed.length > 0
+        ? `Tools used so far: ${[...new Set(toolsUsed)].join(', ')}.`
+        : 'No tools were called.';
+    logger.warn(`FunctionCaller Anthropic: hard iteration cap (${maxIterations}) reached`, {
+      toolsUsed,
+      toolCallCount: toolCallHistory.length,
+    });
     return {
-      response: 'Maximum iterations reached.',
+      response:
+        `⚠️ Task reached the iteration limit (${maxIterations} steps). The agent stopped to prevent infinite loops. ` +
+        `Here is what was completed so far: ${partialSummary}`,
       toolsUsed,
       toolsCalledCount: toolsUsed.length,
       toolCallHistory,
@@ -836,8 +876,18 @@ export class FunctionCaller {
       }
     }
 
+    const partialSummary =
+      toolsUsed.length > 0
+        ? `Tools used so far: ${[...new Set(toolsUsed)].join(', ')}.`
+        : 'No tools were called.';
+    logger.warn(`FunctionCaller Custom: hard iteration cap (${maxIterations}) reached`, {
+      toolsUsed,
+      toolCallCount: toolCallHistory.length,
+    });
     return {
-      response: '⚠️ Maximum iterations reached. Task may be incomplete.',
+      response:
+        `⚠️ Task reached the iteration limit (${maxIterations} steps). The agent stopped to prevent infinite loops. ` +
+        `Here is what was completed so far: ${partialSummary}`,
       toolsUsed,
       toolsCalledCount: toolsUsed.length,
       toolCallHistory,
