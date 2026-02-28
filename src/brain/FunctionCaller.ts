@@ -47,12 +47,22 @@ export class FunctionCaller {
   private aiCallResetTime: number = Date.now();
 
   constructor() {
+    const browserHeaders = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'Accept': 'application/json',
+      'Accept-Language': 'en-US,en;q=0.9',
+    };
+
     if (config.aiProvider === 'openai' && config.openaiApiKey) {
-      this.openaiClient = new OpenAI({ apiKey: config.openaiApiKey });
+      this.openaiClient = new OpenAI({
+        apiKey: config.openaiApiKey,
+        defaultHeaders: browserHeaders,
+      });
     } else if (config.aiProvider === 'groq' && config.groqApiKey) {
       this.openaiClient = new OpenAI({
         apiKey: config.groqApiKey,
         baseURL: 'https://api.groq.com/openai/v1',
+        defaultHeaders: browserHeaders,
       });
     } else if (config.aiProvider === 'anthropic' && config.anthropicApiKey) {
       this.anthropicClient = new Anthropic({ apiKey: config.anthropicApiKey });
@@ -60,6 +70,7 @@ export class FunctionCaller {
       this.openaiClient = new OpenAI({
         apiKey: config.customAiApiKey || 'none',
         baseURL: config.customAiBaseUrl,
+        defaultHeaders: browserHeaders,
       });
     }
   }
