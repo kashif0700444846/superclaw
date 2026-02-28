@@ -13,20 +13,23 @@ import { conversationDB } from '../memory/ConversationDB';
 // ---------------------------------------------------------------------------
 function isApiError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
-  const code = (err as { code?: string })?.code;
-  const status = (err as { status?: number })?.status;
+  const cause = (err as { cause?: { message?: string; code?: string } })?.cause;
+  const causeMsg = cause?.message ?? '';
+  const causeCode = cause?.code ?? '';
+  const code = (err as { code?: string })?.code ?? '';
+  const status = (err as { status?: number })?.status ?? 0;
+
   return (
-    code === 'ENOTFOUND' ||
-    code === 'ECONNREFUSED' ||
-    code === 'ETIMEDOUT' ||
+    code === 'ENOTFOUND' || causeCode === 'ENOTFOUND' ||
+    code === 'ECONNREFUSED' || causeCode === 'ECONNREFUSED' ||
+    code === 'ETIMEDOUT' || causeCode === 'ETIMEDOUT' ||
     status === 401 || status === 403 ||
     status === 502 || status === 503 || status === 504 ||
-    msg.includes('ENOTFOUND') ||
-    msg.includes('getaddrinfo') ||
+    msg.includes('ENOTFOUND') || causeMsg.includes('ENOTFOUND') ||
+    msg.includes('getaddrinfo') || causeMsg.includes('getaddrinfo') ||
+    msg.includes('fetch failed') ||
     msg.includes('API key') ||
-    msg.includes('Unauthorized') ||
-    msg.toLowerCase().includes('api') ||
-    msg.toLowerCase().includes('connection')
+    msg.includes('Unauthorized')
   );
 }
 
@@ -267,43 +270,33 @@ export class TelegramPlatform {
         // 5. Process message — response will arrive via sendResponse() below
         await gateway.receiveMessage(message);
       } catch (err: unknown) {
-        // 6. API error recovery — offer the user inline buttons to fix the issue
         clearInterval(typingInterval);
+        logger.error('Brain processing error', { error: err, userId, platform: 'telegram' });
 
-        // Clean up the thinking placeholder
-        if (this.thinkingMessageIds.has(chatId)) {
-          this.thinkingMessageIds.delete(chatId);
-          if (thinkingMsgId !== undefined) {
-            try {
-              await this.bot.api.deleteMessage(chatId, thinkingMsgId);
-            } catch {
-              // Ignore
-            }
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        const isConnError = isApiError(err);
+
+        // Always show recovery options when AI fails
+        const recoveryText = isConnError
+          ? `❌ AI API Error\n\nThe AI provider is not responding (${errorMsg.slice(0, 100)}).\n\nWhat would you like to do?`
+          : `❌ AI Error\n\n${errorMsg.slice(0, 200)}\n\nIf this keeps happening, you may need to update your API settings:`;
+
+        const keyboard = new InlineKeyboard()
+          .text('🔗 Update Base URL', 'update_base_url')
+          .text('🔑 Update API Key', 'update_api_key')
+          .row()
+          .text('🔄 Retry (send your message again)', 'retry_api');
+
+        try {
+          if (thinkingMsgId) {
+            await this.bot.api.editMessageText(chatId, thinkingMsgId, recoveryText, { reply_markup: keyboard });
+            this.thinkingMessageIds.delete(chatId);
+          } else {
+            await this.bot.api.sendMessage(chatId, recoveryText, { reply_markup: keyboard });
           }
-        }
-
-        if (isApiError(err)) {
-          logger.warn('API error detected — prompting user for recovery action', { error: err });
-          const keyboard = new InlineKeyboard()
-            .text('🔗 Update Base URL', 'update_base_url')
-            .text('🔑 Update API Key', 'update_api_key')
-            .row()
-            .text('🔄 Retry', 'retry_api');
-
-          await this.bot.api.sendMessage(
-            chatId,
-            '❌ AI API Error Detected\n\n' +
-            'The AI provider is not responding. This usually means:\n' +
-            '• The API key has expired or is invalid\n' +
-            '• The base URL has changed (Cloudflare tunnel expired)\n\n' +
-            'What would you like to update?',
-            { reply_markup: keyboard }
-          );
-        } else {
-          // Non-API error — show generic message
-          const errMsg = err instanceof Error ? err.message : String(err);
-          logger.error('Unhandled error in message:text handler', { error: err });
-          await this.bot.api.sendMessage(chatId, `❌ An error occurred: ${errMsg}`);
+        } catch {
+          // If even that fails, send plain text
+          await ctx.reply('❌ AI error. Please check your API settings and try again.').catch(() => {});
         }
         return;
       } finally {
