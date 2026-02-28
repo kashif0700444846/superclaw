@@ -4,6 +4,12 @@ import fs from 'fs';
 import path from 'path';
 import { SuperclawConfig } from '../types/SuperclawConfig';
 
+function sanitizeEnvValue(value: string): string {
+  if (!value) return '';
+  // Remove surrounding quotes (single or double)
+  return value.replace(/^["']|["']$/g, '').trim();
+}
+
 const ENV_PATH = path.resolve(process.cwd(), '.env');
 const CONFIG_PATH = path.resolve(process.cwd(), 'superclaw.config.json');
 
@@ -248,6 +254,11 @@ async function runWizard(): Promise<void> {
     },
   ]);
 
+  // Sanitize API key answers
+  if (apiAnswers.openaiApiKey) apiAnswers.openaiApiKey = sanitizeEnvValue(apiAnswers.openaiApiKey);
+  if (apiAnswers.anthropicApiKey) apiAnswers.anthropicApiKey = sanitizeEnvValue(apiAnswers.anthropicApiKey);
+  if (apiAnswers.groqApiKey) apiAnswers.groqApiKey = sanitizeEnvValue(apiAnswers.groqApiKey);
+
   // ── Custom provider: collect details + test connection ──
   let customAiBaseUrl = '';
   let customAiModel = aiModel;
@@ -276,8 +287,8 @@ async function runWizard(): Promise<void> {
       },
     ]);
 
-    customAiBaseUrl = urlAndKeyDetails.customBaseUrl;
-    customAiApiKey = urlAndKeyDetails.customApiKey;
+    customAiBaseUrl = sanitizeEnvValue(urlAndKeyDetails.customBaseUrl);
+    customAiApiKey = sanitizeEnvValue(urlAndKeyDetails.customApiKey);
 
     // Fetch available models from /v1/models
     console.log(chalk.gray('\n  Fetching available models from endpoint...'));
@@ -371,8 +382,8 @@ async function runWizard(): Promise<void> {
               default: '',
             },
           ]);
-          customAiBaseUrl = retryUrlAndKey.customBaseUrl;
-          customAiApiKey = retryUrlAndKey.customApiKey;
+          customAiBaseUrl = sanitizeEnvValue(retryUrlAndKey.customBaseUrl);
+          customAiApiKey = sanitizeEnvValue(retryUrlAndKey.customApiKey);
 
           // Re-fetch models after URL/key change
           console.log(chalk.gray('\n  Fetching available models from endpoint...'));
@@ -423,9 +434,9 @@ async function runWizard(): Promise<void> {
     }
 
     // Store custom values back into apiAnswers for buildEnvContent
-    apiAnswers.customAiBaseUrl = customAiBaseUrl;
-    apiAnswers.customAiModel = customAiModel;
-    apiAnswers.customAiApiKey = customAiApiKey;
+    apiAnswers.customAiBaseUrl = sanitizeEnvValue(customAiBaseUrl);
+    apiAnswers.customAiModel = sanitizeEnvValue(customAiModel);
+    apiAnswers.customAiApiKey = sanitizeEnvValue(customAiApiKey);
   }
 
   // ── STEP 5: Platform Credentials ───────────────────────
@@ -467,6 +478,11 @@ async function runWizard(): Promise<void> {
     },
   ]);
 
+  // Sanitize credential answers
+  if (credAnswers.telegramBotToken) credAnswers.telegramBotToken = sanitizeEnvValue(credAnswers.telegramBotToken);
+  if (credAnswers.adminTelegramId) credAnswers.adminTelegramId = sanitizeEnvValue(credAnswers.adminTelegramId);
+  if (credAnswers.adminWhatsappNumber) credAnswers.adminWhatsappNumber = sanitizeEnvValue(credAnswers.adminWhatsappNumber);
+
   // ── STEP 6: Agent & VPS Settings ───────────────────────
   console.log(chalk.bold.cyan('\n🖥️  STEP 6: Agent & VPS Settings\n'));
 
@@ -498,6 +514,10 @@ async function runWizard(): Promise<void> {
       when: () => optionalTools.includes('web_search'),
     },
   ]);
+
+  // Sanitize agent answers
+  if (agentAnswers.agentName) agentAnswers.agentName = sanitizeEnvValue(agentAnswers.agentName);
+  if (agentAnswers.serpApiKey) agentAnswers.serpApiKey = sanitizeEnvValue(agentAnswers.serpApiKey);
 
   // ── STEP 7: Final Summary ───────────────────────────────
   const enabledTools = [
@@ -607,40 +627,40 @@ function buildEnvContent(answers: any, platforms: string[]): string {
     `# Generated: ${new Date().toISOString()}`,
     '',
     '# AI Provider',
-    `AI_PROVIDER=${answers.aiProvider || 'openai'}`,
-    `AI_MODEL=${answers.aiModel || 'gpt-4o'}`,
+    `AI_PROVIDER=${sanitizeEnvValue(answers.aiProvider || 'openai')}`,
+    `AI_MODEL=${sanitizeEnvValue(answers.aiModel || 'gpt-4o')}`,
     '',
     '# API Keys',
-    `OPENAI_API_KEY=${answers.openaiApiKey || ''}`,
-    `ANTHROPIC_API_KEY=${answers.anthropicApiKey || ''}`,
-    `GROQ_API_KEY=${answers.groqApiKey || ''}`,
-    `OLLAMA_BASE_URL=${answers.ollamaBaseUrl || 'http://localhost:11434'}`,
+    `OPENAI_API_KEY=${sanitizeEnvValue(answers.openaiApiKey || '')}`,
+    `ANTHROPIC_API_KEY=${sanitizeEnvValue(answers.anthropicApiKey || '')}`,
+    `GROQ_API_KEY=${sanitizeEnvValue(answers.groqApiKey || '')}`,
+    `OLLAMA_BASE_URL=${sanitizeEnvValue(answers.ollamaBaseUrl || 'http://localhost:11434')}`,
     '',
     '# Custom OpenAI-compatible provider (used when AI_PROVIDER=custom)',
-    `CUSTOM_AI_BASE_URL=${answers.customAiBaseUrl || ''}`,
-    `CUSTOM_AI_MODEL=${answers.customAiModel || ''}`,
-    `CUSTOM_AI_API_KEY=${answers.customAiApiKey || ''}`,
+    `CUSTOM_AI_BASE_URL=${sanitizeEnvValue(answers.customAiBaseUrl || '')}`,
+    `CUSTOM_AI_MODEL=${sanitizeEnvValue(answers.customAiModel || '')}`,
+    `CUSTOM_AI_API_KEY=${sanitizeEnvValue(answers.customAiApiKey || '')}`,
     '',
     '# Telegram',
-    `TELEGRAM_BOT_TOKEN=${answers.telegramBotToken || 'DISABLED'}`,
-    `ADMIN_TELEGRAM_ID=${answers.adminTelegramId || '0'}`,
+    `TELEGRAM_BOT_TOKEN=${sanitizeEnvValue(answers.telegramBotToken || 'DISABLED')}`,
+    `ADMIN_TELEGRAM_ID=${sanitizeEnvValue(answers.adminTelegramId || '0')}`,
     '',
     '# WhatsApp',
-    `WHATSAPP_SESSION_NAME=${answers.whatsappSessionName || 'superclaw'}`,
-    `ADMIN_WHATSAPP_NUMBER=${answers.adminWhatsappNumber || 'DISABLED'}`,
+    `WHATSAPP_SESSION_NAME=${sanitizeEnvValue(answers.whatsappSessionName || 'superclaw')}`,
+    `ADMIN_WHATSAPP_NUMBER=${sanitizeEnvValue(answers.adminWhatsappNumber || 'DISABLED')}`,
     '',
     '# Agent',
-    `AGENT_NAME=${answers.agentName || 'SuperClaw'}`,
-    `VPS_HOSTNAME=${answers.vpsHostname || 'my-vps'}`,
+    `AGENT_NAME=${sanitizeEnvValue(answers.agentName || 'SuperClaw')}`,
+    `VPS_HOSTNAME=${sanitizeEnvValue(answers.vpsHostname || 'my-vps')}`,
     '',
     '# Logging',
-    `LOG_LEVEL=${answers.logLevel || 'info'}`,
+    `LOG_LEVEL=${sanitizeEnvValue(answers.logLevel || 'info')}`,
     '',
     '# Database',
     'DB_PATH=./data/superclaw.db',
     '',
     '# Optional',
-    `SERPAPI_KEY=${answers.serpApiKey || ''}`,
+    `SERPAPI_KEY=${sanitizeEnvValue(answers.serpApiKey || '')}`,
     '',
     '# Rate Limiting',
     'MAX_MESSAGES_PER_MINUTE=30',
