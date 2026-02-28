@@ -1,4 +1,16 @@
-import { Client, LocalAuth, Message } from 'whatsapp-web.js';
+// whatsapp-web.js is optional (requires Puppeteer, not available on Android/Termux)
+// Use dynamic require so TypeScript compiles even when package is not installed
+let Client: any;
+let LocalAuth: any;
+
+try {
+  const wwjs = require('whatsapp-web.js');
+  Client = wwjs.Client;
+  LocalAuth = wwjs.LocalAuth;
+} catch {
+  // whatsapp-web.js not installed - this platform will be unavailable
+}
+
 import qrcode from 'qrcode-terminal';
 import path from 'path';
 import { NormalizedMessage, NormalizedResponse } from '../gateway/types';
@@ -10,10 +22,14 @@ import { logger } from '../logger';
 const pendingWhatsAppConfirmations = new Map<string, string>(); // chatId -> confirmationId
 
 export class WhatsAppPlatform {
-  private client: Client;
+  private client: any;
   private isReady: boolean = false;
 
   constructor() {
+    if (!Client) {
+      return;
+    }
+
     const sessionPath = path.resolve(process.cwd(), 'whatsapp-session');
 
     this.client = new Client({
@@ -48,7 +64,7 @@ export class WhatsAppPlatform {
 
   private setupHandlers(): void {
     // QR code for first-time login
-    this.client.on('qr', (qr) => {
+    this.client.on('qr', (qr: any) => {
       logger.info('WhatsApp QR code generated — scan with your phone:');
       qrcode.generate(qr, { small: true });
     });
@@ -61,19 +77,19 @@ export class WhatsAppPlatform {
     });
 
     // Authentication failure
-    this.client.on('auth_failure', (msg) => {
+    this.client.on('auth_failure', (msg: any) => {
       logger.error('WhatsApp authentication failed', { msg });
       this.isReady = false;
     });
 
     // Disconnected
-    this.client.on('disconnected', (reason) => {
+    this.client.on('disconnected', (reason: any) => {
       logger.warn('WhatsApp disconnected', { reason });
       this.isReady = false;
     });
 
     // Incoming messages
-    this.client.on('message', async (msg: Message) => {
+    this.client.on('message', async (msg: any) => {
       // Only process messages from authorized admins
       const senderNumber = msg.from;
       const adminNumbers = config.adminWhatsappNumbers.length > 0
@@ -227,12 +243,19 @@ export class WhatsAppPlatform {
   }
 
   async start(): Promise<void> {
+    if (!Client) {
+      logger.warn('WhatsAppPlatform: whatsapp-web.js not installed. Install it with: npm install whatsapp-web.js');
+      return;
+    }
+
     logger.info('Starting WhatsApp client...');
     logger.info('If first run, scan the QR code below with your WhatsApp mobile app.');
     await this.client.initialize();
   }
 
   async stop(): Promise<void> {
+    if (!this.client) return;
+
     try {
       await this.client.destroy();
       logger.info('WhatsApp client stopped');
@@ -241,7 +264,7 @@ export class WhatsAppPlatform {
     }
   }
 
-  getClient(): Client {
+  getClient(): any {
     return this.client;
   }
 
