@@ -52,8 +52,14 @@ export class TelegramPlatform {
       }
     });
 
-    // Handle all text messages (including commands)
+    // Handle all text messages — SKIP commands (they are handled by their own handlers above)
     this.bot.on('message:text', async (ctx) => {
+      // Skip command messages — they are handled by dedicated command handlers.
+      // Without this guard, /clear (and other commands) would be processed TWICE:
+      // once by the command handler and once here, causing cleared history to be
+      // immediately re-populated by Brain.
+      if (ctx.message.text.startsWith('/')) return;
+
       const chatId = ctx.chat.id.toString();
 
       const message: NormalizedMessage = {
@@ -277,23 +283,8 @@ export class TelegramPlatform {
 
   async sendStartupMessage(): Promise<void> {
     try {
-      const os = await import('os');
-      const interfaces = os.networkInterfaces();
-      const ips: string[] = [];
-      for (const [, addrs] of Object.entries(interfaces)) {
-        for (const addr of addrs || []) {
-          if (!addr.internal && addr.family === 'IPv4') {
-            ips.push(addr.address);
-          }
-        }
-      }
-
       const message =
-        `🟢 *${config.agentName} Online*\n\n` +
-        `Time: ${new Date().toISOString()}\n` +
-        `VPS: ${config.vpsHostname} | ${ips.join(', ') || 'unknown'}\n` +
-        `AI Model: ${config.aiModel}\n` +
-        `Platform: Telegram ✅\n\n` +
+        `🟢 *${config.agentName} Online*\n` +
         `Ready for commands. Type /help for available commands.`;
 
       await this.bot.api.sendMessage(config.adminTelegramId, message, {

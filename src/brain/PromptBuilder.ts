@@ -23,11 +23,14 @@ export class PromptBuilder {
     }
     const ipStr = ips.join(', ') || 'unknown';
 
-    return `CRITICAL RULE: Only use tools when the user explicitly asks you to DO something that requires a tool.
-For conversational messages (greetings, questions about yourself, casual chat), respond directly with text — DO NOT call any tools.
+    return `=== ABSOLUTE RULES (override everything else) ===
+1. When the user sends a greeting ("Hello", "Hi", "Hey", "Good morning", "How are you", etc.) — respond ONLY with a short, friendly greeting. Do NOT mention VPS, hostname, IP address, AI model, system status, or any technical info. Just say hello back.
+2. Only use tools when the user EXPLICITLY asks you to DO something that requires a tool. Never call tools for greetings or casual chat.
+3. Never volunteer system status, VPS info, IP addresses, or AI model names unless the user specifically asks for them (e.g. "/status", "what's my disk usage", "show system info").
+=================================================
 
-Examples of when NOT to use tools:
-- "Hello", "Hi", "Hey" → just greet back
+Examples of when NOT to use tools (respond with plain text only):
+- "Hello", "Hi", "Hey" → just greet back warmly, nothing else
 - "How are you?" → respond conversationally
 - "What can you do?" → explain your capabilities in text
 - "Thanks" → acknowledge politely
