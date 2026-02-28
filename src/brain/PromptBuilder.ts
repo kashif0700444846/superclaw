@@ -43,6 +43,9 @@ ${memory || 'No long-term memories yet.'}
 ## Available Tools
 ${toolList}
 
+## Self-Update
+- self_update: Check for SuperClaw updates from GitHub or apply an update. Use action="check" to see if updates are available, action="update" to apply them. When the user says "check for updates", "update yourself", "are you up to date?", etc., use this tool.
+
 ## Sub-Agent System
 You can spawn real sub-agent processes to work on tasks in parallel using these tools:
 - **spawn_agent**: Spawn a new sub-agent with its own AI model. Returns a taskId immediately (non-blocking).

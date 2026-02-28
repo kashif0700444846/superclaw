@@ -119,6 +119,11 @@ The Puppeteer-based WhatsApp option is still available if you need it, but Baile
 
 ## Changelog
 
+### v2.6.0 (2026-02-28)
+- Fixed update.sh: git checkout pnpm-lock.yaml before pull to prevent merge conflicts
+- Added self_update tool: SuperClaw can check for updates and update itself via Telegram/WhatsApp
+- Say "check for updates" or "update yourself" to trigger self-update
+
 ### v2.5.0 (2026-02-28)
 - Added real sub-agent system: SuperClaw can now spawn parallel child processes with different AI models
 - New tools: spawn_agent, check_agent, list_agents, kill_agent

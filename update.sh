@@ -21,11 +21,16 @@ fi
 
 cd "$INSTALL_DIR"
 
+# Reset auto-generated files that shouldn't block updates
+git checkout -- pnpm-lock.yaml 2>/dev/null || true
+
 echo "📦 Current version: $(node -p "require('./package.json').version" 2>/dev/null || echo 'unknown')"
 echo ""
 
 echo "⬇️  Pulling latest changes from GitHub..."
+git stash --include-untracked 2>/dev/null || true
 git pull
+git stash pop 2>/dev/null || true
 
 echo ""
 echo "📦 Installing/updating dependencies..."
