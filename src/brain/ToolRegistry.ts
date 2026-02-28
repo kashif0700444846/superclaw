@@ -4,6 +4,7 @@ import { isToolEnabled } from '../superclawConfig';
 
 // Core tools — always imported (small, no heavy deps)
 import { SelfUpdateTool } from '../tools/SelfUpdateTool';
+import { SelfModifyTool } from '../tools/SelfModifyTool';
 import { shellTool } from '../tools/ShellTool';
 import { fileReadTool } from '../tools/FileReadTool';
 import { fileWriteTool } from '../tools/FileWriteTool';
@@ -35,6 +36,7 @@ export class ToolRegistry {
     // Core tools — always registered regardless of config
     const coreTools: Tool[] = [
       new SelfUpdateTool(),
+      new SelfModifyTool(),
       shellTool,
       fileReadTool,
       fileWriteTool,

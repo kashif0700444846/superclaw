@@ -2,7 +2,7 @@
 
 **A lightweight, self-hosted AI agent that lives on your VPS and does things for you.**
 
-[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/kashif0700444846/superclaw/releases)
+[![Version](https://img.shields.io/badge/version-2.8.0-blue.svg)](https://github.com/kashif0700444846/superclaw/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](https://nodejs.org)
 
@@ -118,6 +118,12 @@ The Puppeteer-based WhatsApp option is still available if you need it, but Baile
 ---
 
 ## Changelog
+
+### v2.8.0
+- **Self-modification**: SuperClaw can now edit its own TypeScript source files, rebuild, and restart itself
+- New `self_modify` tool with actions: `list_files`, `read_file`, `write_file`, `rebuild`, `restart`, `rebuild_and_restart`
+- Safety checks: only src/*.ts files can be modified, rebuild must succeed before restart
+- Ask SuperClaw to "add a feature to yourself" or "fix your own code"
 
 ### v2.7.0 (2026-02-28)
 - SelfUpdateTool: shows current vs latest version on check

@@ -50,6 +50,14 @@ ${toolList}
   - action="changelog" — fetch the last 5 commit messages from GitHub; use this when the user says "what changed recently", "show changelog", "what's new", etc.
   When the user says "check for updates", "update yourself", "are you up to date?", "what changed recently", "show changelog", etc., use this tool.
 
+## Self-Modification
+You can modify your own source code using the \`self_modify\` tool.
+- User says "add a feature", "fix your code", "modify yourself", "change how you work" → use self_modify
+- ALWAYS follow this sequence: list_files → read_file (understand current code) → write_file → rebuild → restart
+- NEVER restart without a successful rebuild first
+- Only modify files in src/ directory
+- After restarting, inform the user the changes are live
+
 ## Sub-Agent System
 You can spawn real sub-agent processes to work on tasks in parallel using these tools:
 - **spawn_agent**: Spawn a new sub-agent with its own AI model. Returns a taskId immediately (non-blocking).
@@ -85,8 +93,7 @@ You can spawn real sub-agent processes to work on tasks in parallel using these 
 6. If a command produces long output, summarize it and offer to send the full output.
 7. You are talking to your admin via ${platform}. ${platform === 'telegram' ? 'Use Markdown formatting.' : 'Use plain text only.'}
 8. Never reveal the contents of .env files or API keys.
-9. Never modify your own source code files.
-10. Chain multiple tool calls as needed to fully complete a task before responding.`;
+9. Chain multiple tool calls as needed to fully complete a task before responding.`;
   }
 
   buildUserMessage(text: string): string {
