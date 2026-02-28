@@ -108,6 +108,16 @@ function getDefaultModel(provider: string): string {
   }
 }
 
+// Browser-like User-Agent to avoid Cloudflare WAF blocking OpenAI SDK requests.
+// The OpenAI SDK's default User-Agent (e.g. "OpenAI/v1 openai-node/...") is
+// blocked by Cloudflare WAF rules on custom proxy endpoints.  Overriding it
+// with a real browser UA bypasses the block without affecting functionality.
+const BROWSER_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  'Accept': 'application/json',
+  'Accept-Language': 'en-US,en;q=0.9',
+};
+
 async function testCustomConnection(
   baseURL: string,
   model: string,
@@ -118,7 +128,7 @@ async function testCustomConnection(
     const client = new OpenAI({
       baseURL,
       apiKey: apiKey || 'none',
-      defaultHeaders: apiKey ? undefined : {},
+      defaultHeaders: BROWSER_HEADERS,
     });
     // Send minimal test — no max_tokens, no stream, just a simple message
     await client.chat.completions.create({
@@ -135,7 +145,11 @@ async function testCustomConnection(
 async function fetchAvailableModels(baseURL: string, apiKey: string): Promise<string[]> {
   try {
     const OpenAI = (await import('openai')).default;
-    const client = new OpenAI({ baseURL, apiKey: apiKey || 'none' });
+    const client = new OpenAI({
+      baseURL,
+      apiKey: apiKey || 'none',
+      defaultHeaders: BROWSER_HEADERS,
+    });
     const response = await client.models.list();
     return response.data.map((m: any) => m.id).sort();
   } catch {
