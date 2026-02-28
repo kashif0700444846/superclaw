@@ -4,12 +4,13 @@
   "description": "Autonomous AI agent system — modular, memory-efficient",
   "main": "dist/index.js",
   "bin": {
-    "superclaw": "dist/index.js"
+    "superclaw": "dist/cli/cli.js"
   },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
+    "cli": "node dist/cli/cli.js",
     "setup": "tsx src/setup/wizard.ts",
     "lint": "tsc --noEmit",
     "install:lite": "pnpm install",

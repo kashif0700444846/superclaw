@@ -321,6 +321,31 @@ EOF
     fi
 }
 
+# Install superclaw CLI globally in Termux PREFIX
+install_cli() {
+    log_info "Installing superclaw CLI command..."
+
+    local cli_js
+    cli_js="$(pwd)/dist/cli/cli.js"
+
+    if [[ ! -f "$cli_js" ]]; then
+        log_warn "dist/cli/cli.js not found — skipping CLI install (run 'pnpm build' first)"
+        add_summary "⚠️  superclaw CLI not installed (dist/cli/cli.js missing — run pnpm build)"
+        return 0
+    fi
+
+    chmod +x "$cli_js"
+
+    if [[ -d "${PREFIX}/bin" ]]; then
+        ln -sf "$cli_js" "${PREFIX}/bin/superclaw"
+        log_success "'superclaw' command installed at ${PREFIX}/bin/superclaw"
+        add_summary "✅ 'superclaw' CLI command available globally (type: superclaw)"
+    else
+        log_warn "Termux PREFIX/bin not found — add $(pwd)/dist/cli/cli.js to your PATH manually"
+        add_summary "⚠️  superclaw CLI not linked — add dist/cli/cli.js to PATH manually"
+    fi
+}
+
 # Create a convenience launcher script
 create_launcher() {
     log_info "Creating launcher script..."
@@ -424,6 +449,7 @@ main() {
     setup_config
     test_browser
     create_launcher
+    install_cli
     prompt_termux_boot
     
     echo ""

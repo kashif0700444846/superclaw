@@ -1,4 +1,4 @@
-export type Platform = 'telegram' | 'whatsapp';
+export type Platform = 'telegram' | 'whatsapp' | 'cli';
 
 export interface NormalizedMessage {
   platform: Platform;

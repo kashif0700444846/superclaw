@@ -221,6 +221,16 @@ header "Building TypeScript"
 pnpm build
 log "TypeScript compiled to dist/"
 
+# ── Install superclaw CLI globally ────────────────────────
+header "Installing superclaw CLI"
+chmod +x "$(pwd)/dist/cli/cli.js"
+if [ -d "/usr/local/bin" ]; then
+  ln -sf "$(pwd)/dist/cli/cli.js" "/usr/local/bin/superclaw"
+  log "✅ 'superclaw' command installed at /usr/local/bin/superclaw"
+else
+  warn "Could not find /usr/local/bin — add $(pwd)/dist/cli/cli.js to your PATH manually"
+fi
+
 # ── Configure PM2 ─────────────────────────────────────────
 header "Configuring PM2"
 mkdir -p logs
