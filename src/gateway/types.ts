@@ -71,11 +71,15 @@ export interface AgentConfig {
   customAiApiKey?: string;
   /** Optional — only required when Telegram platform is enabled */
   telegramBotToken: string;
-  /** Optional — only required when Telegram platform is enabled */
+  /** Primary admin Telegram ID (first entry of adminTelegramIds, kept for backward compat) */
   adminTelegramId: string;
+  /** All authorized Telegram admin IDs (supports comma-separated ADMIN_TELEGRAM_ID) */
+  adminTelegramIds: number[];
   whatsappSessionName: string;
-  /** Optional — only required when WhatsApp platform is enabled */
+  /** Primary admin WhatsApp number (first entry of adminWhatsappNumbers, kept for backward compat) */
   adminWhatsappNumber: string;
+  /** All authorized WhatsApp admin numbers (supports comma-separated ADMIN_WHATSAPP_NUMBERS) */
+  adminWhatsappNumbers: string[];
   vpsHostname: string;
   logLevel: string;
   dbPath: string;

@@ -146,8 +146,11 @@ export class TelegramPlatform {
   private setupHandlers(): void {
     // Middleware: auth check for every message
     this.bot.use(async (ctx, next) => {
-      const userId = ctx.from?.id?.toString();
-      if (userId !== config.adminTelegramId) {
+      const userId = ctx.from?.id;
+      const adminIds = config.adminTelegramIds.length > 0
+        ? config.adminTelegramIds
+        : [parseInt(config.adminTelegramId, 10)];
+      if (!userId || !adminIds.includes(userId)) {
         await ctx.reply('Unauthorized. This is a private agent.');
         return;
       }
@@ -329,12 +332,16 @@ export class TelegramPlatform {
 
     // Handle callback queries (Yes/No confirmation buttons + API recovery buttons)
     this.bot.on('callback_query:data', async (ctx) => {
-      const userId = ctx.from?.id?.toString();
-      if (userId !== config.adminTelegramId) {
+      const userId = ctx.from?.id;
+      const adminIds = config.adminTelegramIds.length > 0
+        ? config.adminTelegramIds
+        : [parseInt(config.adminTelegramId, 10)];
+      if (!userId || !adminIds.includes(userId)) {
         await ctx.answerCallbackQuery({ text: 'Unauthorized.' });
         return;
       }
 
+      const userIdStr = String(userId);
       const data = ctx.callbackQuery.data;
       const chatId = ctx.chat?.id?.toString() ?? ctx.from.id.toString();
 
@@ -342,7 +349,7 @@ export class TelegramPlatform {
       // API recovery callbacks
       // ------------------------------------------------------------------
       if (data === 'update_base_url') {
-        this.userState.set(userId, 'awaiting_base_url');
+        this.userState.set(userIdStr, 'awaiting_base_url');
         await ctx.answerCallbackQuery({ text: 'Send the new base URL' });
         try {
           await ctx.editMessageReplyMarkup({ reply_markup: undefined });
@@ -355,7 +362,7 @@ export class TelegramPlatform {
       }
 
       if (data === 'update_api_key') {
-        this.userState.set(userId, 'awaiting_api_key');
+        this.userState.set(userIdStr, 'awaiting_api_key');
         await ctx.answerCallbackQuery({ text: 'Send the new API key' });
         try {
           await ctx.editMessageReplyMarkup({ reply_markup: undefined });
@@ -523,8 +530,13 @@ export class TelegramPlatform {
         `🟢 *${config.agentName} Online*\n` +
         `Ready for commands. Type /help for available commands.`;
 
-      // Static message with simple Markdown — use safe send for consistency
-      await safeSendMessage(this.bot, config.adminTelegramId, message);
+      // Send startup message to all configured admin IDs
+      const adminIds = config.adminTelegramIds.length > 0
+        ? config.adminTelegramIds
+        : [parseInt(config.adminTelegramId, 10)];
+      for (const adminId of adminIds) {
+        await safeSendMessage(this.bot, String(adminId), message);
+      }
     } catch (error: any) {
       logger.warn('Failed to send Telegram startup message', { error: error.message });
     }

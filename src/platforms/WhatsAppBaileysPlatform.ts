@@ -130,10 +130,13 @@ export class WhatsAppBaileysPlatform {
         if (msg.key.fromMe) continue; // Skip our own messages
 
         const from: string = msg.key.remoteJid || '';
-        const adminJid = toJid(config.adminWhatsappNumber);
 
-        // Auth check
-        if (from !== adminJid) {
+        // Auth check — support multiple admin numbers
+        const adminJids = (config.adminWhatsappNumbers.length > 0
+          ? config.adminWhatsappNumbers
+          : [config.adminWhatsappNumber]
+        ).map(toJid);
+        if (!adminJids.includes(from)) {
           await this.sock?.sendMessage(from, { text: 'Unauthorized.' });
           continue;
         }

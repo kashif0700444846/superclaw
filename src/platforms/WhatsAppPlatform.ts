@@ -74,10 +74,13 @@ export class WhatsAppPlatform {
 
     // Incoming messages
     this.client.on('message', async (msg: Message) => {
-      // Only process messages from admin
+      // Only process messages from authorized admins
       const senderNumber = msg.from;
+      const adminNumbers = config.adminWhatsappNumbers.length > 0
+        ? config.adminWhatsappNumbers
+        : [config.adminWhatsappNumber];
 
-      if (senderNumber !== config.adminWhatsappNumber) {
+      if (!adminNumbers.includes(senderNumber)) {
         await msg.reply('Unauthorized.');
         return;
       }

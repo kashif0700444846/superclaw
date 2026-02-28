@@ -60,6 +60,22 @@ function buildFallbackModels(): FallbackModel[] {
 
 const provider = validateProvider(optionalEnv('AI_PROVIDER', 'openai'));
 
+// Parse comma-separated Telegram admin IDs
+const adminTelegramIdRaw = optionalEnv('ADMIN_TELEGRAM_ID', '');
+const adminTelegramIds = adminTelegramIdRaw
+  .split(',')
+  .map((id) => parseInt(id.trim(), 10))
+  .filter((id) => !isNaN(id));
+const adminTelegramId = adminTelegramIds[0] || 0; // first ID for backward compat
+
+// Parse comma-separated WhatsApp admin numbers
+// ADMIN_WHATSAPP_NUMBERS (plural) takes precedence; falls back to ADMIN_WHATSAPP_NUMBER (singular)
+const adminWhatsappNumbers = (optionalEnv('ADMIN_WHATSAPP_NUMBERS') || optionalEnv('ADMIN_WHATSAPP_NUMBER', 'DISABLED'))
+  .split(',')
+  .map((n) => n.trim())
+  .filter((n) => n.length > 0);
+const adminWhatsappNumber = adminWhatsappNumbers[0] || 'DISABLED'; // first number for backward compat
+
 export const config: AgentConfig = {
   agentName: optionalEnv('AGENT_NAME', 'SuperClaw'),
   aiProvider: provider,
@@ -72,9 +88,11 @@ export const config: AgentConfig = {
   customAiModel: optionalEnv('CUSTOM_AI_MODEL'),
   customAiApiKey: optionalEnv('CUSTOM_AI_API_KEY'),
   telegramBotToken: optionalEnv('TELEGRAM_BOT_TOKEN', 'DISABLED'),
-  adminTelegramId: optionalEnv('ADMIN_TELEGRAM_ID', '0'),
+  adminTelegramId: String(adminTelegramId),   // backward compat — first ID as string
+  adminTelegramIds,                            // all authorized Telegram admin IDs
   whatsappSessionName: optionalEnv('WHATSAPP_SESSION_NAME', 'superclaw'),
-  adminWhatsappNumber: optionalEnv('ADMIN_WHATSAPP_NUMBER', 'DISABLED'),
+  adminWhatsappNumber,                         // backward compat — first number
+  adminWhatsappNumbers,                        // all authorized WhatsApp admin numbers
   vpsHostname: optionalEnv('VPS_HOSTNAME', 'localhost'),
   logLevel: optionalEnv('LOG_LEVEL', 'info'),
   dbPath: optionalEnv('DB_PATH', './data/superclaw.db'),
