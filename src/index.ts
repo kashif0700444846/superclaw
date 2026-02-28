@@ -4,7 +4,7 @@ import { config } from './config';
 import { gateway } from './gateway/Gateway';
 import { brain } from './brain/Brain';
 import { memoryManager } from './memory/MemoryManager';
-import { conversationDB } from './memory/ConversationDB';
+import { initConversationDB, getConversationDB } from './memory/ConversationDB';
 import { toolRegistry } from './brain/ToolRegistry';
 import { superclawConfig, isPlatformEnabled, getWhatsAppDriver } from './superclawConfig';
 import { NormalizedMessage } from './gateway/types';
@@ -12,6 +12,9 @@ import { mcpManager } from './mcp/McpManager';
 
 async function main(): Promise<void> {
   logger.info(`Starting ${config.agentName}...`);
+
+  // Initialize the database first — must complete before any platform or brain usage
+  await initConversationDB();
   logger.info(`AI Provider: ${config.aiProvider} | Model: ${config.aiModel}`);
   logger.info(
     `Estimated RAM: ~${superclawConfig.estimatedRamMb} MB | ` +
@@ -122,7 +125,7 @@ async function main(): Promise<void> {
     }
 
     try {
-      conversationDB.close();
+      getConversationDB().close();
     } catch (error: any) {
       logger.warn('Error closing DB', { error: error.message });
     }

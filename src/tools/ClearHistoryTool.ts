@@ -1,5 +1,5 @@
 import { Tool, ToolResult } from '../gateway/types.js';
-import { conversationDB } from '../memory/ConversationDB.js';
+import { getConversationDB } from '../memory/ConversationDB.js';
 
 export class ClearHistoryTool implements Tool {
   name = 'clear_history';
@@ -28,8 +28,8 @@ This only clears the conversation messages — it does NOT clear the long-term m
 
   async execute(args: { userId: string; platform: string }): Promise<ToolResult> {
     try {
-      const countBefore = conversationDB.getHistory(args.userId, args.platform, 1000).length;
-      conversationDB.clearHistory(args.userId, args.platform);
+      const countBefore = getConversationDB().getHistory(args.userId, args.platform, 1000).length;
+      getConversationDB().clearHistory(args.userId, args.platform);
       return {
         success: true,
         data: `✅ Conversation history cleared! Removed ${countBefore} messages.\n\nYour context is now fresh and clean. Responses should be faster now. 🚀`,

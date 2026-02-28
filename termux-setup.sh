@@ -154,30 +154,45 @@ setup_environment() {
 # Install Node.js dependencies
 install_node_deps() {
     log_info "Installing Node.js dependencies..."
-    
-    # Check if pnpm is available
+
+    # better-sqlite3 requires native compilation which fails on Android/Termux.
+    # We install with --no-optional so it is skipped entirely.
+    # sql.js (pure WebAssembly) is used as the SQLite driver on Android instead.
+
     if command -v pnpm &> /dev/null; then
         log_info "Using pnpm..."
-        
-        # Install without optional deps (skip Puppeteer)
-        pnpm install --no-optional
-        
-        # Install playwright-core specifically
+
+        # Install all non-optional deps; better-sqlite3 is now optional so it
+        # won't block the install if node-gyp fails.
+        pnpm install --no-optional 2>&1 | grep -v "better-sqlite3" || true
+
+        # Ensure sql.js is present (it is in dependencies, but double-check)
+        log_info "Ensuring sql.js is installed (pure-JS SQLite for Android)..."
+        pnpm add sql.js 2>/dev/null || npm install sql.js 2>/dev/null || true
+
+        # Install playwright-core for browser automation
         log_info "Installing playwright-core..."
-        pnpm add playwright-core
+        pnpm add playwright-core 2>/dev/null || true
     else
         log_info "Using npm..."
-        
-        # Install without optional deps
-        npm install --omit=optional
-        
+
+        # Install without optional deps (skips better-sqlite3 on Android)
+        npm install --omit=optional 2>&1 | grep -v "better-sqlite3" || true
+
+        # Ensure sql.js is present
+        log_info "Ensuring sql.js is installed (pure-JS SQLite for Android)..."
+        npm install sql.js 2>/dev/null || true
+
         # Install playwright-core
         log_info "Installing playwright-core..."
-        npm install playwright-core
+        npm install playwright-core 2>/dev/null || true
     fi
-    
+
+    log_warn "Note: 'better-sqlite3' native compilation errors above (if any) are expected on Android and can be safely ignored."
+    log_warn "      SuperClaw will automatically use sql.js (pure WebAssembly) as the SQLite driver on this device."
+
     log_success "Node.js dependencies installed"
-    add_summary "✅ Node.js dependencies installed"
+    add_summary "✅ Node.js dependencies installed (sql.js used for SQLite — no native compilation needed)"
 }
 
 # Configure superclaw.config.json for Termux

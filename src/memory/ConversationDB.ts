@@ -1,9 +1,9 @@
-import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import { ConversationMessage } from '../gateway/types';
 import { config } from '../config';
 import { logger } from '../logger';
+import { DbAdapter, createDatabase } from './DatabaseAdapter';
 
 interface DbRow {
   id: number;
@@ -17,10 +17,16 @@ interface DbRow {
 }
 
 export class ConversationDB {
-  private db: Database.Database;
+  private db!: DbAdapter;
   private readonly maxMessages = 50;
+  private initialized = false;
 
-  constructor() {
+  /**
+   * Async factory — call this instead of `new ConversationDB()`.
+   * Kept for backwards compatibility: the module-level singleton below
+   * calls `init()` and awaits it before exporting.
+   */
+  async init(): Promise<void> {
     const dbPath = path.resolve(process.cwd(), config.dbPath);
     const dbDir = path.dirname(dbPath);
 
@@ -28,14 +34,21 @@ export class ConversationDB {
       fs.mkdirSync(dbDir, { recursive: true });
     }
 
-    this.db = new Database(dbPath);
+    this.db = await createDatabase(dbPath);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
-    this.initialize();
+    this.initializeSchema();
+    this.initialized = true;
     logger.info(`ConversationDB initialized at ${dbPath}`);
   }
 
-  private initialize(): void {
+  private ensureReady(): void {
+    if (!this.initialized) {
+      throw new Error('ConversationDB.init() has not been awaited yet');
+    }
+  }
+
+  private initializeSchema(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS conversations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,6 +74,7 @@ export class ConversationDB {
     platform: string,
     message: Omit<ConversationMessage, 'timestamp'>
   ): void {
+    this.ensureReady();
     try {
       const stmt = this.db.prepare(`
         INSERT INTO conversations (user_id, platform, role, content, tool_call_id, tool_name, timestamp)
@@ -111,6 +125,7 @@ export class ConversationDB {
   }
 
   getHistory(userId: string, platform: string, limit: number = 20): ConversationMessage[] {
+    this.ensureReady();
     try {
       const rows = this.db
         .prepare(`
@@ -149,6 +164,7 @@ export class ConversationDB {
    * Useful for manual pruning beyond the automatic maxMessages cap.
    */
   pruneOldMessages(userId: string, platform: string, keepLast: number): void {
+    this.ensureReady();
     try {
       const countStmt = this.db.prepare(`
         SELECT COUNT(*) as count FROM conversations
@@ -177,6 +193,7 @@ export class ConversationDB {
   }
 
   clearHistory(userId: string, platform: string): void {
+    this.ensureReady();
     try {
       this.db
         .prepare(`
@@ -190,6 +207,7 @@ export class ConversationDB {
   }
 
   getStats(): { totalMessages: number; uniqueUsers: number } {
+    this.ensureReady();
     try {
       const total = (
         this.db.prepare('SELECT COUNT(*) as count FROM conversations').get() as { count: number }
@@ -207,9 +225,47 @@ export class ConversationDB {
   }
 
   close(): void {
-    this.db.close();
+    if (this.initialized) {
+      this.db.close();
+    }
   }
 }
 
-export const conversationDB = new ConversationDB();
-export default conversationDB;
+/**
+ * Module-level singleton.
+ *
+ * Because `createDatabase` is async (sql.js uses async WASM init),
+ * we export a Promise that resolves to the ready instance.
+ * Consumers should `await conversationDBReady` before first use,
+ * or import the `conversationDB` export after the app bootstrap
+ * has awaited `initConversationDB()`.
+ */
+let _instance: ConversationDB | null = null;
+
+export async function initConversationDB(): Promise<ConversationDB> {
+  if (_instance) return _instance;
+  const db = new ConversationDB();
+  await db.init();
+  _instance = db;
+  return db;
+}
+
+/**
+ * Synchronous accessor — only safe to call after `initConversationDB()` has resolved.
+ * Throws if called before initialization.
+ */
+export function getConversationDB(): ConversationDB {
+  if (!_instance) {
+    throw new Error(
+      'ConversationDB has not been initialized yet. Await initConversationDB() first.'
+    );
+  }
+  return _instance;
+}
+
+// Legacy default export for backwards compatibility.
+// Modules that do `import conversationDB from './ConversationDB'` will get
+// the Promise; they should await it.  Modules that already await the app
+// bootstrap (which calls initConversationDB) can use getConversationDB().
+export { _instance as conversationDB };
+export default { initConversationDB, getConversationDB };

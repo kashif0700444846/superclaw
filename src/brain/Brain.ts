@@ -1,5 +1,5 @@
 import { NormalizedMessage, NormalizedResponse } from '../gateway/types';
-import { conversationDB } from '../memory/ConversationDB';
+import { getConversationDB } from '../memory/ConversationDB';
 import { memoryManager } from '../memory/MemoryManager';
 import { promptBuilder } from './PromptBuilder';
 import { functionCaller } from './FunctionCaller';
@@ -95,7 +95,7 @@ export class Brain {
       }
 
       // STEP 2: Load conversation history (capped at MAX_HISTORY_MESSAGES)
-      let history = conversationDB.getHistory(userId, platform, MAX_HISTORY_MESSAGES);
+      let history = getConversationDB().getHistory(userId, platform, MAX_HISTORY_MESSAGES);
 
       // STEP 3: Context window guard — trim if history is too long
       if (history.length > CONTEXT_WINDOW_MAX_MESSAGES) {
@@ -200,11 +200,11 @@ export class Brain {
       }
 
       // STEP 8: Save conversation to DB
-      conversationDB.addMessage(userId, platform, {
+      getConversationDB().addMessage(userId, platform, {
         role: 'user',
         content: text,
       });
-      conversationDB.addMessage(userId, platform, {
+      getConversationDB().addMessage(userId, platform, {
         role: 'assistant',
         content: result.response,
       });

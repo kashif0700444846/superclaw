@@ -6,7 +6,7 @@ import { NormalizedMessage, NormalizedResponse } from '../gateway/types';
 import { gateway } from '../gateway/Gateway';
 import { config } from '../config';
 import { logger } from '../logger';
-import { conversationDB } from '../memory/ConversationDB';
+import { getConversationDB } from '../memory/ConversationDB';
 
 // ---------------------------------------------------------------------------
 // Helper: detect whether an error is an AI API connectivity / auth error
@@ -162,7 +162,7 @@ export class TelegramPlatform {
       const userId = ctx.from!.id.toString();
       const chatId = ctx.chat.id.toString();
       try {
-        conversationDB.clearHistory(userId, 'telegram');
+        getConversationDB().clearHistory(userId, 'telegram');
         await ctx.reply('✅ Conversation history cleared! Starting fresh. 🚀');
         logger.info(`Telegram /clear: cleared history for user ${userId}`);
       } catch (err: any) {

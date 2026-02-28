@@ -3,9 +3,24 @@
 # SuperClaw — Modular Ubuntu 22.04 LTS Install Script v2
 # Run as a non-root user with sudo access
 # Usage: bash install.sh
+#
+# Android/Termux users: run termux-setup.sh instead.
 # ============================================================
 
 set -e
+
+# ── Termux guard ──────────────────────────────────────────
+# Redirect Android/Termux users to the dedicated setup script.
+if [ -n "${TERMUX_VERSION}" ] || [ -d "/data/data/com.termux" ]; then
+  echo ""
+  echo "📱 Android/Termux detected!"
+  echo "   This script is for Linux VPS only."
+  echo "   Please run the Termux-specific setup instead:"
+  echo ""
+  echo "     bash termux-setup.sh"
+  echo ""
+  exit 1
+fi
 
 # Colors
 RED='\033[0;31m'
@@ -183,8 +198,9 @@ else
   pnpm install
 fi
 
-echo "Building native modules..."
+echo "Building native modules (better-sqlite3)..."
 pnpm rebuild better-sqlite3 2>/dev/null || npm rebuild better-sqlite3 2>/dev/null || true
+log "Note: if better-sqlite3 rebuild fails, SuperClaw will fall back to sql.js automatically."
 
 log "Dependencies installed"
 
