@@ -134,6 +134,48 @@ export class ConversationDB {
     }
   }
 
+  /**
+   * Returns only the last N messages for a given chat (alias for getHistory with explicit limit).
+   * Used by Brain to cap context sent to the AI.
+   */
+  getRecentMessages(chatId: string, limit: number): ConversationMessage[] {
+    // chatId is stored as user_id in this DB; platform is embedded in chatId for multi-platform support.
+    // We delegate to getHistory which already supports limit.
+    return this.getHistory(chatId, 'telegram', limit);
+  }
+
+  /**
+   * Deletes messages older than the keepLast count for a given user+platform pair.
+   * Useful for manual pruning beyond the automatic maxMessages cap.
+   */
+  pruneOldMessages(userId: string, platform: string, keepLast: number): void {
+    try {
+      const countStmt = this.db.prepare(`
+        SELECT COUNT(*) as count FROM conversations
+        WHERE user_id = ? AND platform = ?
+      `);
+      const row = countStmt.get(userId, platform) as { count: number };
+
+      if (row.count > keepLast) {
+        const deleteCount = row.count - keepLast;
+        this.db
+          .prepare(`
+          DELETE FROM conversations
+          WHERE id IN (
+            SELECT id FROM conversations
+            WHERE user_id = ? AND platform = ?
+            ORDER BY timestamp ASC
+            LIMIT ?
+          )
+        `)
+          .run(userId, platform, deleteCount);
+        logger.info(`ConversationDB: pruned ${deleteCount} old messages for ${platform}:${userId}`);
+      }
+    } catch (error) {
+      logger.error('Failed to prune old messages', { error });
+    }
+  }
+
   clearHistory(userId: string, platform: string): void {
     try {
       this.db

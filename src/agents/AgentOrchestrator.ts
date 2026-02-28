@@ -18,16 +18,24 @@ import { logger } from '../logger';
 const MAX_CONCURRENT_AGENTS = parseInt(process.env.MAX_CONCURRENT_AGENTS || '5', 10);
 
 // Resolve sub-agent entry point:
-// - In production (compiled): dist/agents/SubAgent.js
-// - In development (ts-node/tsx): src/agents/SubAgent.ts
-const isDev = process.env.NODE_ENV !== 'production' &&
-  !require('fs').existsSync(path.resolve(process.cwd(), 'dist', 'agents', 'SubAgent.js'));
+// - In production (compiled via tsc): dist/agents/SubAgent.js  (__dirname = dist/agents)
+// - In development (tsx/ts-node):     src/agents/SubAgent.ts   (__dirname = src/agents)
+//
+// We detect production by checking whether the compiled JS file actually exists.
+// This is more reliable than NODE_ENV which may not be set by PM2.
+const compiledSubAgent = path.resolve(process.cwd(), 'dist', 'agents', 'SubAgent.js');
+const isDev = !require('fs').existsSync(compiledSubAgent);
 
 const SUB_AGENT_ENTRY = isDev
   ? path.resolve(process.cwd(), 'src', 'agents', 'SubAgent.ts')
-  : path.resolve(__dirname, 'SubAgent.js');
+  : compiledSubAgent;
 
-const EXEC_ARGV = isDev ? ['-r', 'ts-node/register'] : ['--max-old-space-size=512'];
+const EXEC_ARGV = isDev
+  ? ['-r', 'ts-node/register']
+  : ['--max-old-space-size=512'];
+
+// Shorter timeout for faster failure detection (5 minutes instead of 10)
+const DEFAULT_TIMEOUT_MS = 300000;
 
 export class AgentOrchestrator extends EventEmitter {
   // In-memory map of running agents: taskId → AgentHandle
@@ -67,15 +75,34 @@ export class AgentOrchestrator extends EventEmitter {
     }
 
     // Create task record in data/tasks/
-    const task = taskStore.createTask(params);
-    logger.info(`AgentOrchestrator: spawning sub-agent ${task.id} (${task.label}) via ${task.provider}/${task.model}`);
+    const task = taskStore.createTask({
+      ...params,
+      timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    });
+
+    logger.info(
+      `AgentOrchestrator: forking sub-agent ${task.id} (${task.label}) ` +
+      `via ${task.provider}/${task.model} — entry: ${SUB_AGENT_ENTRY} (isDev=${isDev})`
+    );
 
     // Fork the sub-agent process
-    const child = fork(SUB_AGENT_ENTRY, [], {
-      execArgv: EXEC_ARGV,
-      env: { ...process.env },
-      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-    });
+    let child: import('child_process').ChildProcess;
+    try {
+      child = fork(SUB_AGENT_ENTRY, [], {
+        execArgv: EXEC_ARGV,
+        env: { ...process.env },
+        stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+      });
+    } catch (forkErr: any) {
+      // Fork failed immediately — mark task as failed and re-throw
+      taskStore.update(task.id, {
+        status: 'failed',
+        error: `Fork failed: ${forkErr.message}`,
+        completedAt: new Date().toISOString(),
+      });
+      logger.error(`AgentOrchestrator: fork failed for task ${task.id}`, { error: forkErr });
+      throw new Error(`Failed to spawn sub-agent: ${forkErr.message}`);
+    }
 
     // Pipe sub-agent stdout/stderr to our logger
     child.stdout?.on('data', (d: Buffer) => {
@@ -85,8 +112,8 @@ export class AgentOrchestrator extends EventEmitter {
       logger.warn(`[SubAgent:${task.id.slice(0, 8)}] STDERR: ${d.toString().trim()}`);
     });
 
-    // Set up timeout
-    const timeoutMs = task.timeoutMs || 600000;
+    // Set up timeout (default 5 minutes for faster failure detection)
+    const timeoutMs = task.timeoutMs || DEFAULT_TIMEOUT_MS;
     const timeoutTimer = setTimeout(() => {
       logger.warn(`AgentOrchestrator: sub-agent ${task.id} timed out after ${timeoutMs}ms`);
       this.killAgent(task.id, 'Timeout exceeded');

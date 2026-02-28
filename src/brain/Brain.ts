@@ -8,6 +8,18 @@ import { logger } from '../logger';
 import { gateway } from '../gateway/Gateway';
 import { agentOrchestrator } from '../agents/AgentOrchestrator';
 
+/** Maximum number of conversation history messages sent to the AI per request. */
+const MAX_HISTORY_MESSAGES = 20;
+
+/** Words that suggest the AI claimed to do something without using tools. */
+const HALLUCINATION_WORDS = [
+  'i have', "i've", 'i created', 'i wrote', 'i built',
+  'i installed', 'i configured', 'i set up', 'i deployed',
+  'i updated', 'i modified', 'i deleted', 'i removed',
+  'i ran', 'i executed', 'i started', 'i stopped',
+  'done', 'completed', 'finished', 'accomplished',
+];
+
 export class Brain {
   async process(message: NormalizedMessage): Promise<NormalizedResponse[]> {
     const { platform, userId, chatId, text, timestamp } = message;
@@ -21,8 +33,8 @@ export class Brain {
         return [commandResponse];
       }
 
-      // STEP 2: Load conversation history
-      const history = conversationDB.getHistory(userId, platform, 20);
+      // STEP 2: Load conversation history (capped at MAX_HISTORY_MESSAGES)
+      const history = conversationDB.getHistory(userId, platform, MAX_HISTORY_MESSAGES);
 
       // STEP 3: Build system prompt
       const systemPrompt = promptBuilder.buildSystemPrompt(platform, userId);
@@ -64,8 +76,21 @@ export class Brain {
       const outcome =
         result.toolsUsed.length > 0
           ? `Used tools: ${result.toolsUsed.join(', ')}`
-          : 'Text response';
+          : 'Text response (no tools used)';
       memoryManager.appendTodayLog(platform, summary, outcome);
+
+      // STEP 7b: Warn if AI claimed to do something without using any tools
+      if (result.toolsUsed.length === 0) {
+        const lower = result.response.toLowerCase();
+        const hallucinated = HALLUCINATION_WORDS.some((w) => lower.includes(w));
+        if (hallucinated) {
+          logger.warn('Brain: AI response may be a hallucination — claimed action without tool use', {
+            userId,
+            platform,
+            responseSnippet: result.response.substring(0, 200),
+          });
+        }
+      }
 
       // STEP 8: Format and return response
       const parseMode = platform === 'telegram' ? 'Markdown' : 'plain';

@@ -2,9 +2,19 @@
 
 **A lightweight, self-hosted AI agent that lives on your VPS and does things for you.**
 
-[![Version](https://img.shields.io/badge/version-2.8.0-blue.svg)](https://github.com/kashif0700444846/superclaw/releases)
+[![Version](https://img.shields.io/badge/version-2.9.0-blue.svg)](https://github.com/kashif0700444846/superclaw/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](https://nodejs.org)
+
+---
+
+## Changelog
+
+### v2.9.0
+- **Fix hallucination**: AI now adds disclaimer when it describes actions without executing them; max 10 tool-call iterations
+- **Fix slow responses**: Conversation history capped at 20 messages; system prompt trimmed
+- **Fix sub-agents**: AgentOrchestrator now forks compiled JS (dist/) instead of TypeScript source; better error handling
+- **Pruning**: Old conversation messages auto-pruned to keep context lean
 
 ---
 

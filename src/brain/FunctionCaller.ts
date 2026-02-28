@@ -11,6 +11,29 @@ export interface FunctionCallerResult {
   toolsUsed: string[];
 }
 
+const MAX_ITERATIONS = 10;
+
+/**
+ * Returns true if the text sounds like the AI is claiming to have done something
+ * without actually executing any tools (hallucination indicator).
+ */
+function looksLikeHallucination(text: string): boolean {
+  const lower = text.toLowerCase();
+  const claimPhrases = [
+    "i have", "i've", "i've", "i created", "i wrote", "i built",
+    "i installed", "i configured", "i set up", "i deployed",
+    "i updated", "i modified", "i deleted", "i removed",
+    "i ran", "i executed", "i started", "i stopped",
+    "done", "completed", "finished", "accomplished",
+    "successfully created", "successfully installed",
+    "successfully configured", "successfully deployed",
+  ];
+  return claimPhrases.some((phrase) => lower.includes(phrase));
+}
+
+const HALLUCINATION_DISCLAIMER =
+  '\n\n⚠️ *[Note: I described what I would do but did not execute it. Please ask me again and I will use my tools to actually do it.]*';
+
 // Inline types for the old Anthropic SDK (0.17.x) which lacks tool-use support
 interface AnthropicMessageParam {
   role: 'user' | 'assistant';
@@ -70,7 +93,6 @@ export class FunctionCaller {
     }
 
     const toolsUsed: string[] = [];
-    const maxIterations = 10;
 
     if (config.aiProvider === 'openai' || config.aiProvider === 'groq') {
       return this.runOpenAiLoop(
@@ -81,7 +103,7 @@ export class FunctionCaller {
         chatId,
         userId,
         toolsUsed,
-        maxIterations
+        MAX_ITERATIONS
       );
     } else if (config.aiProvider === 'anthropic') {
       return this.runAnthropicLoop(
@@ -101,7 +123,7 @@ export class FunctionCaller {
         chatId,
         userId,
         toolsUsed,
-        maxIterations
+        MAX_ITERATIONS
       );
     }
 
@@ -140,7 +162,7 @@ export class FunctionCaller {
     const tools = toolRegistry.toOpenAiFunctions();
 
     for (let i = 0; i < maxIterations; i++) {
-      logger.debug(`FunctionCaller OpenAI iteration ${i + 1}`);
+      logger.info(`FunctionCaller OpenAI iteration ${i + 1}/${maxIterations}`);
 
       const response = await this.openaiClient.chat.completions.create({
         model: config.aiModel,
@@ -157,8 +179,19 @@ export class FunctionCaller {
       messages.push(assistantMessage as OpenAI.Chat.ChatCompletionMessageParam);
 
       if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
+        // AI returned text without calling any tools
+        const responseText = assistantMessage.content || 'Task completed.';
+        // If no tools were used at all and the response sounds like a claim of action,
+        // append a disclaimer to warn the user about potential hallucination
+        if (toolsUsed.length === 0 && looksLikeHallucination(responseText)) {
+          logger.warn('FunctionCaller: AI returned action-claim text without executing any tools (possible hallucination)');
+          return {
+            response: responseText + HALLUCINATION_DISCLAIMER,
+            toolsUsed,
+          };
+        }
         return {
-          response: assistantMessage.content || 'Task completed.',
+          response: responseText,
           toolsUsed,
         };
       }
@@ -173,7 +206,7 @@ export class FunctionCaller {
           toolParams.userId = userId;
         }
 
-        logger.info(`Executing tool: ${toolName}`, { params: toolParams });
+        logger.info(`FunctionCaller: executing tool "${toolName}"`, { params: toolParams });
         toolsUsed.push(toolName);
 
         const tool = toolRegistry.getTool(toolName);
@@ -194,7 +227,7 @@ export class FunctionCaller {
     }
 
     return {
-      response: 'Maximum iterations reached. Task may be incomplete.',
+      response: '⚠️ Maximum iterations reached. Task may be incomplete.',
       toolsUsed,
     };
   }
@@ -257,7 +290,12 @@ export class FunctionCaller {
 
       if (!toolMatch) {
         // No tool call — final answer
-        return { response: assistantText.trim() || 'Task completed.', toolsUsed };
+        const responseText = assistantText.trim() || 'Task completed.';
+        if (toolsUsed.length === 0 && looksLikeHallucination(responseText)) {
+          logger.warn('FunctionCaller (anthropic): AI returned action-claim text without executing any tools (possible hallucination)');
+          return { response: responseText + HALLUCINATION_DISCLAIMER, toolsUsed };
+        }
+        return { response: responseText, toolsUsed };
       }
 
       // Parse tool call
@@ -362,7 +400,7 @@ export class FunctionCaller {
     const tools = toolRegistry.toOpenAiFunctions();
 
     for (let i = 0; i < maxIterations; i++) {
-      logger.debug(`FunctionCaller Custom iteration ${i + 1}`);
+      logger.info(`FunctionCaller Custom iteration ${i + 1}/${maxIterations}`);
 
       const response = await this.openaiClient.chat.completions.create({
         model,
@@ -379,8 +417,16 @@ export class FunctionCaller {
       messages.push(assistantMessage as OpenAI.Chat.ChatCompletionMessageParam);
 
       if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
+        const responseText = assistantMessage.content || 'Task completed.';
+        if (toolsUsed.length === 0 && looksLikeHallucination(responseText)) {
+          logger.warn('FunctionCaller (custom): AI returned action-claim text without executing any tools (possible hallucination)');
+          return {
+            response: responseText + HALLUCINATION_DISCLAIMER,
+            toolsUsed,
+          };
+        }
         return {
-          response: assistantMessage.content || 'Task completed.',
+          response: responseText,
           toolsUsed,
         };
       }
@@ -395,7 +441,7 @@ export class FunctionCaller {
           toolParams.userId = userId;
         }
 
-        logger.info(`Executing tool (custom): ${toolName}`, { params: toolParams });
+        logger.info(`FunctionCaller: executing tool (custom) "${toolName}"`, { params: toolParams });
         toolsUsed.push(toolName);
 
         const tool = toolRegistry.getTool(toolName);
@@ -416,7 +462,7 @@ export class FunctionCaller {
     }
 
     return {
-      response: 'Maximum iterations reached. Task may be incomplete.',
+      response: '⚠️ Maximum iterations reached. Task may be incomplete.',
       toolsUsed,
     };
   }

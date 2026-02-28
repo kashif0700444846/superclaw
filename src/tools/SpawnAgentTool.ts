@@ -1,6 +1,7 @@
 // src/tools/SpawnAgentTool.ts
 import { Tool, ToolResult } from '../gateway/types';
 import { agentOrchestrator } from '../agents/AgentOrchestrator';
+import { taskStore } from '../agents/TaskStore';
 import { AIProvider } from '../agents/types';
 import { logger } from '../logger';
 
@@ -34,7 +35,7 @@ export class SpawnAgentTool implements Tool {
       },
       timeoutMs: {
         type: 'number',
-        description: 'Timeout in milliseconds (default: 600000 = 10 minutes)',
+        description: 'Timeout in milliseconds (default: 300000 = 5 minutes)',
       },
     },
     required: ['label', 'prompt'],
@@ -58,6 +59,15 @@ export class SpawnAgentTool implements Tool {
 
       logger.info(`SpawnAgentTool: spawned task ${task.id} (${task.label})`);
 
+      // Verify the task was actually created in TaskStore
+      const stored = taskStore.read(task.id);
+      if (!stored) {
+        return {
+          success: false,
+          error: `Sub-agent process was forked but task record not found in TaskStore for id "${task.id}". Spawning may have failed.`,
+        };
+      }
+
       return {
         success: true,
         data: {
@@ -65,12 +75,13 @@ export class SpawnAgentTool implements Tool {
           label: task.label,
           model: task.model,
           provider: task.provider,
-          status: task.status,
+          status: stored.status,
           message: `Sub-agent spawned successfully. Use check_agent with taskId "${task.id}" to monitor progress.`,
         },
       };
     } catch (err: any) {
-      return { success: false, error: err.message };
+      logger.error(`SpawnAgentTool: failed to spawn agent`, { error: err.message });
+      return { success: false, error: `Failed to spawn sub-agent: ${err.message}` };
     }
   }
 }
