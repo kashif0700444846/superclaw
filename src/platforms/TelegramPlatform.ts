@@ -1,9 +1,61 @@
 import { Bot, InlineKeyboard } from 'grammy';
+import fs from 'fs';
+import path from 'path';
+import { execSync } from 'child_process';
 import { NormalizedMessage, NormalizedResponse } from '../gateway/types';
 import { gateway } from '../gateway/Gateway';
 import { config } from '../config';
 import { logger } from '../logger';
 import { conversationDB } from '../memory/ConversationDB';
+
+// ---------------------------------------------------------------------------
+// Helper: detect whether an error is an AI API connectivity / auth error
+// ---------------------------------------------------------------------------
+function isApiError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  const code = (err as { code?: string })?.code;
+  const status = (err as { status?: number })?.status;
+  return (
+    code === 'ENOTFOUND' ||
+    code === 'ECONNREFUSED' ||
+    code === 'ETIMEDOUT' ||
+    status === 401 || status === 403 ||
+    status === 502 || status === 503 || status === 504 ||
+    msg.includes('ENOTFOUND') ||
+    msg.includes('getaddrinfo') ||
+    msg.includes('API key') ||
+    msg.includes('Unauthorized') ||
+    msg.toLowerCase().includes('api') ||
+    msg.toLowerCase().includes('connection')
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Helper: update (or append) a key=value line in the .env file
+// ---------------------------------------------------------------------------
+function updateEnvVar(key: string, value: string): void {
+  const envPath = path.join(process.cwd(), '.env');
+  let content = fs.readFileSync(envPath, 'utf-8');
+  const regex = new RegExp(`^${key}=.*$`, 'm');
+  if (regex.test(content)) {
+    content = content.replace(regex, `${key}=${value}`);
+  } else {
+    content += `\n${key}=${value}`;
+  }
+  fs.writeFileSync(envPath, content, 'utf-8');
+}
+
+// ---------------------------------------------------------------------------
+// Helper: return the env-var name for the API key of the current provider
+// ---------------------------------------------------------------------------
+function apiKeyEnvVar(): string {
+  switch (config.aiProvider) {
+    case 'anthropic': return 'ANTHROPIC_API_KEY';
+    case 'groq':      return 'GROQ_API_KEY';
+    case 'custom':    return 'CUSTOM_AI_API_KEY';
+    default:          return 'OPENAI_API_KEY';
+  }
+}
 
 export class TelegramPlatform {
   private bot: Bot;
@@ -14,6 +66,13 @@ export class TelegramPlatform {
    * Consumed (deleted from map) on first use so subsequent chunks are sent normally.
    */
   private thinkingMessageIds: Map<string, number> = new Map();
+
+  /**
+   * Tracks per-user recovery state:
+   *   'awaiting_base_url' — next text message is a new CUSTOM_AI_BASE_URL
+   *   'awaiting_api_key'  — next text message is a new API key
+   */
+  private userState: Map<string, string> = new Map();
 
   constructor() {
     this.bot = new Bot(config.telegramBotToken);
@@ -54,24 +113,73 @@ export class TelegramPlatform {
 
     // Handle all text messages — SKIP commands (they are handled by their own handlers above)
     this.bot.on('message:text', async (ctx) => {
+      const userId = ctx.from!.id.toString();
+      const chatId = ctx.chat.id.toString();
+      const text = ctx.message.text;
+
+      // -----------------------------------------------------------------------
+      // STATE: awaiting_base_url — user is providing a new CUSTOM_AI_BASE_URL
+      // -----------------------------------------------------------------------
+      if (this.userState.get(userId) === 'awaiting_base_url') {
+        this.userState.delete(userId);
+        const newUrl = text.trim();
+        try {
+          updateEnvVar('CUSTOM_AI_BASE_URL', newUrl);
+          await ctx.reply('✅ Base URL updated! Restarting...');
+          logger.info(`API recovery: CUSTOM_AI_BASE_URL updated to ${newUrl}`);
+          try {
+            execSync('pm2 restart superclaw');
+          } catch (restartErr: any) {
+            logger.warn('PM2 restart failed (may not be running under PM2)', { error: restartErr.message });
+            await ctx.reply('⚠️ Could not restart via PM2. Please restart manually.');
+          }
+        } catch (err: any) {
+          logger.error('Failed to update CUSTOM_AI_BASE_URL', { error: err.message });
+          await ctx.reply(`❌ Failed to update .env: ${err.message}`);
+        }
+        return;
+      }
+
+      // -----------------------------------------------------------------------
+      // STATE: awaiting_api_key — user is providing a new API key
+      // -----------------------------------------------------------------------
+      if (this.userState.get(userId) === 'awaiting_api_key') {
+        this.userState.delete(userId);
+        const newKey = text.trim();
+        const envKey = apiKeyEnvVar();
+        try {
+          updateEnvVar(envKey, newKey);
+          await ctx.reply('✅ API key updated! Restarting...');
+          logger.info(`API recovery: ${envKey} updated`);
+          try {
+            execSync('pm2 restart superclaw');
+          } catch (restartErr: any) {
+            logger.warn('PM2 restart failed (may not be running under PM2)', { error: restartErr.message });
+            await ctx.reply('⚠️ Could not restart via PM2. Please restart manually.');
+          }
+        } catch (err: any) {
+          logger.error(`Failed to update ${envKey}`, { error: err.message });
+          await ctx.reply(`❌ Failed to update .env: ${err.message}`);
+        }
+        return;
+      }
+
       // Skip command messages — they are handled by dedicated command handlers.
       // Without this guard, /clear (and other commands) would be processed TWICE:
       // once by the command handler and once here, causing cleared history to be
       // immediately re-populated by Brain.
-      if (ctx.message.text.startsWith('/')) return;
-
-      const chatId = ctx.chat.id.toString();
+      if (text.startsWith('/')) return;
 
       const message: NormalizedMessage = {
         platform: 'telegram',
-        userId: ctx.from!.id.toString(),
+        userId,
         chatId,
-        text: ctx.message.text,
+        text,
         timestamp: new Date(ctx.message.date * 1000),
         messageId: ctx.message.message_id.toString(),
       };
 
-      logger.debug(`Telegram message from ${ctx.from!.id}: ${ctx.message.text.substring(0, 80)}`);
+      logger.debug(`Telegram message from ${ctx.from!.id}: ${text.substring(0, 80)}`);
 
       // 1. Send typing action immediately (await ensures it's dispatched before processing)
       try {
@@ -110,8 +218,48 @@ export class TelegramPlatform {
       try {
         // 5. Process message — response will arrive via sendResponse() below
         await gateway.receiveMessage(message);
+      } catch (err: unknown) {
+        // 6. API error recovery — offer the user inline buttons to fix the issue
+        clearInterval(typingInterval);
+
+        // Clean up the thinking placeholder
+        if (this.thinkingMessageIds.has(chatId)) {
+          this.thinkingMessageIds.delete(chatId);
+          if (thinkingMsgId !== undefined) {
+            try {
+              await this.bot.api.deleteMessage(chatId, thinkingMsgId);
+            } catch {
+              // Ignore
+            }
+          }
+        }
+
+        if (isApiError(err)) {
+          logger.warn('API error detected — prompting user for recovery action', { error: err });
+          const keyboard = new InlineKeyboard()
+            .text('🔗 Update Base URL', 'update_base_url')
+            .text('🔑 Update API Key', 'update_api_key')
+            .row()
+            .text('🔄 Retry', 'retry_api');
+
+          await this.bot.api.sendMessage(
+            chatId,
+            '❌ AI API Error Detected\n\n' +
+            'The AI provider is not responding. This usually means:\n' +
+            '• The API key has expired or is invalid\n' +
+            '• The base URL has changed (Cloudflare tunnel expired)\n\n' +
+            'What would you like to update?',
+            { reply_markup: keyboard }
+          );
+        } else {
+          // Non-API error — show generic message
+          const errMsg = err instanceof Error ? err.message : String(err);
+          logger.error('Unhandled error in message:text handler', { error: err });
+          await this.bot.api.sendMessage(chatId, `❌ An error occurred: ${errMsg}`);
+        }
+        return;
       } finally {
-        // 6. Always clear the typing interval regardless of success/error
+        // Always clear the typing interval regardless of success/error
         clearInterval(typingInterval);
 
         // If the placeholder was never consumed (e.g. gateway returned nothing or
@@ -129,7 +277,7 @@ export class TelegramPlatform {
       }
     });
 
-    // Handle callback queries (Yes/No confirmation buttons)
+    // Handle callback queries (Yes/No confirmation buttons + API recovery buttons)
     this.bot.on('callback_query:data', async (ctx) => {
       const userId = ctx.from?.id?.toString();
       if (userId !== config.adminTelegramId) {
@@ -138,7 +286,48 @@ export class TelegramPlatform {
       }
 
       const data = ctx.callbackQuery.data;
-      // Format: "confirm:YES:<confirmationId>" or "confirm:NO:<confirmationId>"
+      const chatId = ctx.chat?.id?.toString() ?? ctx.from.id.toString();
+
+      // ------------------------------------------------------------------
+      // API recovery callbacks
+      // ------------------------------------------------------------------
+      if (data === 'update_base_url') {
+        this.userState.set(userId, 'awaiting_base_url');
+        await ctx.answerCallbackQuery({ text: 'Send the new base URL' });
+        try {
+          await ctx.editMessageReplyMarkup({ reply_markup: undefined });
+        } catch { /* ignore */ }
+        await this.bot.api.sendMessage(
+          chatId,
+          'Please send the new base URL (e.g., https://your-tunnel.trycloudflare.com/v1):'
+        );
+        return;
+      }
+
+      if (data === 'update_api_key') {
+        this.userState.set(userId, 'awaiting_api_key');
+        await ctx.answerCallbackQuery({ text: 'Send the new API key' });
+        try {
+          await ctx.editMessageReplyMarkup({ reply_markup: undefined });
+        } catch { /* ignore */ }
+        await this.bot.api.sendMessage(chatId, 'Please send the new API key:');
+        return;
+      }
+
+      if (data === 'retry_api') {
+        await ctx.answerCallbackQuery({
+          text: '🔄 Please try sending your message again.',
+          show_alert: false,
+        });
+        try {
+          await ctx.editMessageReplyMarkup({ reply_markup: undefined });
+        } catch { /* ignore */ }
+        return;
+      }
+
+      // ------------------------------------------------------------------
+      // Confirmation callbacks: "confirm:YES:<id>" or "confirm:NO:<id>"
+      // ------------------------------------------------------------------
       if (data.startsWith('confirm:')) {
         const parts = data.split(':');
         const answer = parts[1]; // YES or NO
