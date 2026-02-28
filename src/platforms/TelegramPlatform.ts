@@ -57,6 +57,54 @@ function apiKeyEnvVar(): string {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Helper: send a message with Markdown, falling back to plain text on error
+// ---------------------------------------------------------------------------
+async function safeSendMessage(
+  bot: Bot,
+  chatId: string,
+  text: string,
+  extraOptions?: Record<string, unknown>,
+): Promise<void> {
+  try {
+    await bot.api.sendMessage(chatId, text, {
+      parse_mode: 'Markdown',
+      ...extraOptions,
+    });
+  } catch {
+    // Markdown failed (bad entities / unescaped chars) — send as plain text
+    await bot.api.sendMessage(chatId, text, extraOptions);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helper: edit a message with Markdown; if that fails, send a new plain-text
+// message instead (edit is best-effort)
+// ---------------------------------------------------------------------------
+async function safeEditMessageText(
+  bot: Bot,
+  chatId: string,
+  messageId: number,
+  text: string,
+): Promise<boolean> {
+  // Try edit with Markdown
+  try {
+    await bot.api.editMessageText(chatId, messageId, text, {
+      parse_mode: 'Markdown',
+    });
+    return true;
+  } catch {
+    // Markdown edit failed — try plain-text edit
+    try {
+      await bot.api.editMessageText(chatId, messageId, text);
+      return true;
+    } catch {
+      // Edit entirely failed (message too old, deleted, etc.) — caller will send new message
+      return false;
+    }
+  }
+}
+
 export class TelegramPlatform {
   private bot: Bot;
   private isRunning: boolean = false;
@@ -375,10 +423,8 @@ export class TelegramPlatform {
           .text('✅ Yes, Execute', `confirm:YES:${response.confirmationId}`)
           .text('❌ No, Cancel', `confirm:NO:${response.confirmationId}`);
 
-        await this.bot.api.sendMessage(chatId, response.text, {
-          parse_mode: response.parseMode === 'Markdown' ? 'Markdown' : undefined,
-          reply_markup: keyboard,
-        });
+        // AI-generated content — use safe send (Markdown → plain text fallback)
+        await safeSendMessage(this.bot, chatId, response.text, { reply_markup: keyboard });
         return;
       }
 
@@ -394,38 +440,22 @@ export class TelegramPlatform {
           const thinkingMsgId = this.thinkingMessageIds.get(chatId);
           if (thinkingMsgId !== undefined) {
             this.thinkingMessageIds.delete(chatId);
-            try {
-              await this.bot.api.editMessageText(chatId, thinkingMsgId, chunk, {
-                parse_mode: response.parseMode === 'Markdown' ? 'Markdown' : undefined,
-              });
+            // safeEditMessageText tries Markdown edit, then plain-text edit
+            const edited = await safeEditMessageText(this.bot, chatId, thinkingMsgId, chunk);
+            if (edited) {
               continue; // Successfully edited — move to next chunk
-            } catch (editErr: any) {
-              logger.debug('Could not edit thinking placeholder, sending new message', {
-                error: editErr.message,
-              });
-              // Fall through to sendMessage below
             }
+            logger.debug('Could not edit thinking placeholder, sending new message');
+            // Fall through to safeSendMessage below
           }
         }
 
         // Send as a new message (either no placeholder, edit failed, or subsequent chunks)
-        await this.bot.api.sendMessage(chatId, chunk, {
-          parse_mode: response.parseMode === 'Markdown' ? 'Markdown' : undefined,
-        });
+        // AI-generated content — use safe send (Markdown → plain text fallback)
+        await safeSendMessage(this.bot, chatId, chunk);
       }
     } catch (error: any) {
-      // If Markdown parsing fails, retry as plain text
-      if (error.message?.includes('parse') || error.message?.includes('entities')) {
-        try {
-          // Consume placeholder on retry path too
-          await this.consumeThinkingMessage(chatId);
-          await this.bot.api.sendMessage(chatId, response.text);
-        } catch (retryError: any) {
-          logger.error('Failed to send Telegram message', { error: retryError.message });
-        }
-      } else {
-        logger.error('Failed to send Telegram message', { error: error.message });
-      }
+      logger.error('Failed to send Telegram message', { error: error.message });
     }
   }
 
@@ -476,9 +506,8 @@ export class TelegramPlatform {
         `🟢 *${config.agentName} Online*\n` +
         `Ready for commands. Type /help for available commands.`;
 
-      await this.bot.api.sendMessage(config.adminTelegramId, message, {
-        parse_mode: 'Markdown',
-      });
+      // Static message with simple Markdown — use safe send for consistency
+      await safeSendMessage(this.bot, config.adminTelegramId, message);
     } catch (error: any) {
       logger.warn('Failed to send Telegram startup message', { error: error.message });
     }
