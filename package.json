@@ -1,6 +1,6 @@
 {
   "name": "superclaw",
-  "version": "2.9.0",
+  "version": "2.9.1",
   "description": "Autonomous AI agent system — modular, memory-efficient",
   "main": "dist/index.js",
   "bin": {
@@ -37,7 +37,6 @@
     "openai": "^4.28.0",
     "pino": "^8.19.0",
     "qrcode-terminal": "^0.12.0",
-    "uuid": "^13.0.0",
     "winston": "^3.11.0"
   },
   "optionalDependencies": {
@@ -50,7 +49,6 @@
     "@types/node": "^20.11.20",
     "@types/node-cron": "^3.0.11",
     "@types/qrcode-terminal": "^0.12.2",
-    "@types/uuid": "^11.0.0",
     "esbuild": "^0.27.3",
     "ts-node": "^10.9.2",
     "tsx": "^4.7.1",

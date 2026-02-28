@@ -4,7 +4,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import { SubAgentTask, TaskStatus, SpawnAgentParams } from './types';
 import { config } from '../config';
 import { logger } from '../logger';
@@ -20,7 +20,7 @@ export class TaskStore {
 
   createTask(params: SpawnAgentParams): SubAgentTask {
     const task: SubAgentTask = {
-      id: uuidv4(),
+      id: randomUUID(),
       parentTaskId: null,
       label: params.label,
       model: params.model ?? config.aiModel,
