@@ -4,6 +4,10 @@
 // Delete this file after setup is complete for security.
 // =============================================================================
 
+// Fix 1: Suppress PHP errors from corrupting JSON responses
+ini_set('display_errors', 0);
+error_reporting(0);
+
 session_start();
 
 define('SETUP_PASSWORD', 'superclaw'); // Change this before deploying!
@@ -12,87 +16,179 @@ define('ENV_FILE', PROJECT_ROOT . '/.env');
 define('DIST_DIR', PROJECT_ROOT . '/dist');
 
 // ---------------------------------------------------------------------------
+// Fix 4: Helper — find a binary by checking common paths
+// ---------------------------------------------------------------------------
+function findBinary(string $name): string {
+    $paths = [
+        "/usr/local/bin/{$name}",
+        "/usr/bin/{$name}",
+        "/bin/{$name}",
+        "/root/.nvm/versions/node/v20.15.1/bin/{$name}",
+        "/root/.nvm/versions/node/v20.18.0/bin/{$name}",
+        "/root/.nvm/versions/node/v22.0.0/bin/{$name}",
+        "/usr/local/node/bin/{$name}",
+        "/root/.local/share/pnpm/{$name}",
+        "/usr/local/pnpm/{$name}",
+    ];
+    foreach ($paths as $path) {
+        if (file_exists($path) && is_executable($path)) {
+            return $path;
+        }
+    }
+    return $name; // fallback to PATH lookup
+}
+
+// Fix 6: Check whether shell_exec is available and not disabled
+function canRunShell(): bool {
+    if (!function_exists('shell_exec')) {
+        return false;
+    }
+    $disabled = array_map('trim', explode(',', (string) ini_get('disable_functions')));
+    return !in_array('shell_exec', $disabled, true);
+}
+
+// ---------------------------------------------------------------------------
 // AJAX Action Handlers
 // ---------------------------------------------------------------------------
 if (isset($_GET['action'])) {
+    // Fix 2: Buffer all output so stray warnings cannot corrupt JSON
+    ob_start();
     header('Content-Type: application/json');
 
     // Auth check for all actions
     if (!isset($_SESSION['setup_auth'])) {
+        ob_end_clean();
         echo json_encode(['error' => 'Unauthorized']);
         exit;
     }
 
+    // Fix 4: Ensure common binary directories are on PATH for shell_exec
+    putenv('PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+        . ':/root/.nvm/versions/node/v20.15.1/bin'
+        . ':/root/.nvm/versions/node/v20.18.0/bin'
+        . ':/root/.nvm/versions/node/v22.0.0/bin'
+        . ':/usr/local/node/bin'
+        . ':/root/.local/share/pnpm'
+        . ':/usr/local/pnpm');
+
     $action = $_GET['action'];
 
-    switch ($action) {
+    try {
+        switch ($action) {
 
-        case 'status':
-            $nodeVersion   = trim((string) shell_exec('node --version 2>&1'));
-            $pnpmVersion   = trim((string) shell_exec('pnpm --version 2>&1'));
-            $gitVersion    = trim((string) shell_exec('git --version 2>&1'));
-            $pm2List       = trim((string) shell_exec('pm2 list 2>&1'));
-            $envExists     = file_exists(ENV_FILE);
-            $distExists    = is_dir(DIST_DIR);
-            $scRunning     = (stripos($pm2List, 'superclaw') !== false && stripos($pm2List, 'online') !== false);
+            case 'status':
+                ob_end_clean();
 
-            echo json_encode([
-                'node'       => $nodeVersion ?: 'Not found',
-                'pnpm'       => $pnpmVersion ?: 'Not found',
-                'git'        => $gitVersion  ?: 'Not found',
-                'env'        => $envExists,
-                'dist'       => $distExists,
-                'running'    => $scRunning,
-                'pm2_output' => $pm2List,
-            ]);
-            break;
-
-        case 'install':
-            set_time_limit(300);
-            $output = shell_exec('cd ' . escapeshellarg(PROJECT_ROOT) . ' && pnpm install 2>&1');
-            echo json_encode(['output' => $output ?: '(no output)']);
-            break;
-
-        case 'build':
-            set_time_limit(300);
-            $output = shell_exec('cd ' . escapeshellarg(PROJECT_ROOT) . ' && pnpm build 2>&1');
-            echo json_encode(['output' => $output ?: '(no output)']);
-            break;
-
-        case 'configure':
-            $provider    = $_POST['ai_provider']        ?? 'openai';
-            $apiKey      = $_POST['api_key']            ?? '';
-            $model       = $_POST['ai_model']           ?? 'gpt-4o';
-            $tgToken     = $_POST['telegram_token']     ?? '';
-            $tgAdminId   = $_POST['admin_telegram_id']  ?? '';
-            $agentName   = $_POST['agent_name']         ?? 'SuperClaw';
-            $waEnabled   = isset($_POST['whatsapp_enabled']) && $_POST['whatsapp_enabled'] === '1';
-            $waNumber    = $_POST['whatsapp_number']    ?? '';
-            $hostname    = trim((string) shell_exec('hostname 2>&1')) ?: 'my-vps';
-
-            // Build provider-specific key lines
-            $providerKeys = '';
-            switch ($provider) {
-                case 'openai':
-                    $providerKeys = "OPENAI_API_KEY={$apiKey}";
+                if (!canRunShell()) {
+                    echo json_encode([
+                        'node'       => 'shell_exec disabled',
+                        'pnpm'       => 'shell_exec disabled',
+                        'git'        => 'shell_exec disabled',
+                        'env'        => file_exists(ENV_FILE),
+                        'dist'       => is_dir(DIST_DIR),
+                        'running'    => false,
+                        'pm2_output' => '',
+                        'shell_disabled' => true,
+                        'shell_disabled_msg' => 'shell_exec is disabled in PHP. Enable it in aaPanel → PHP → Disable Functions.',
+                    ]);
                     break;
-                case 'anthropic':
-                    $providerKeys = "ANTHROPIC_API_KEY={$apiKey}";
-                    break;
-                case 'groq':
-                    $providerKeys = "GROQ_API_KEY={$apiKey}";
-                    break;
-                case 'ollama':
-                    $providerKeys = "OLLAMA_BASE_URL={$apiKey}";
-                    break;
-                case 'custom':
-                    $providerKeys = "CUSTOM_AI_BASE_URL={$apiKey}\nCUSTOM_AI_API_KEY=\nCUSTOM_AI_MODEL={$model}";
-                    break;
-            }
+                }
 
-            $waLine = $waEnabled ? "ADMIN_WHATSAPP_NUMBER={$waNumber}\nADMIN_WHATSAPP_NUMBERS=" : "ADMIN_WHATSAPP_NUMBER=\nADMIN_WHATSAPP_NUMBERS=";
+                $node    = findBinary('node');
+                $pnpm    = findBinary('pnpm');
+                $git     = findBinary('git');
+                $pm2     = findBinary('pm2');
 
-            $env = <<<ENV
+                $nodeVersion = @shell_exec("{$node} --version 2>/dev/null");
+                $pnpmVersion = @shell_exec("{$pnpm} --version 2>/dev/null");
+                $gitVersion  = @shell_exec("{$git} --version 2>/dev/null");
+                $pm2List     = @shell_exec("{$pm2} list 2>/dev/null");
+                $pm2Status   = @shell_exec("{$pm2} list 2>/dev/null | grep superclaw");
+
+                $envExists  = file_exists(ENV_FILE);
+                $distExists = is_dir(DIST_DIR);
+                $scRunning  = $pm2Status
+                    ? (strpos($pm2Status, 'online') !== false)
+                    : false;
+
+                echo json_encode([
+                    'node'       => $nodeVersion ? trim($nodeVersion) : 'Not found',
+                    'pnpm'       => $pnpmVersion ? trim($pnpmVersion) : 'Not found',
+                    'git'        => $gitVersion  ? trim($gitVersion)  : 'Not found',
+                    'env'        => $envExists,
+                    'dist'       => $distExists,
+                    'running'    => $scRunning,
+                    'pm2_output' => $pm2List ? trim($pm2List) : '',
+                ]);
+                break;
+
+            case 'install':
+                ob_end_clean();
+                set_time_limit(300);
+
+                if (!canRunShell()) {
+                    echo json_encode(['error' => 'shell_exec is disabled. Enable it in aaPanel → PHP → Disable Functions.', 'output' => '']);
+                    break;
+                }
+
+                $pnpm   = findBinary('pnpm');
+                $output = @shell_exec('cd ' . escapeshellarg(PROJECT_ROOT) . " && {$pnpm} install 2>&1");
+                echo json_encode(['output' => $output ?: 'No output (shell_exec may be disabled)', 'success' => true]);
+                break;
+
+            case 'build':
+                ob_end_clean();
+                set_time_limit(300);
+
+                if (!canRunShell()) {
+                    echo json_encode(['error' => 'shell_exec is disabled. Enable it in aaPanel → PHP → Disable Functions.', 'output' => '']);
+                    break;
+                }
+
+                $pnpm   = findBinary('pnpm');
+                $output = @shell_exec('cd ' . escapeshellarg(PROJECT_ROOT) . " && {$pnpm} build 2>&1");
+                echo json_encode(['output' => $output ?: 'No output (shell_exec may be disabled)', 'success' => true]);
+                break;
+
+            case 'configure':
+                ob_end_clean();
+                $provider  = $_POST['ai_provider']       ?? 'openai';
+                $apiKey    = $_POST['api_key']           ?? '';
+                $model     = $_POST['ai_model']          ?? 'gpt-4o';
+                $tgToken   = $_POST['telegram_token']    ?? '';
+                $tgAdminId = $_POST['admin_telegram_id'] ?? '';
+                $agentName = $_POST['agent_name']        ?? 'SuperClaw';
+                $waEnabled = isset($_POST['whatsapp_enabled']) && $_POST['whatsapp_enabled'] === '1';
+                $waNumber  = $_POST['whatsapp_number']   ?? '';
+                $hostname  = canRunShell()
+                    ? (trim((string) @shell_exec('hostname 2>/dev/null')) ?: 'my-vps')
+                    : 'my-vps';
+
+                // Build provider-specific key lines
+                $providerKeys = '';
+                switch ($provider) {
+                    case 'openai':
+                        $providerKeys = "OPENAI_API_KEY={$apiKey}";
+                        break;
+                    case 'anthropic':
+                        $providerKeys = "ANTHROPIC_API_KEY={$apiKey}";
+                        break;
+                    case 'groq':
+                        $providerKeys = "GROQ_API_KEY={$apiKey}";
+                        break;
+                    case 'ollama':
+                        $providerKeys = "OLLAMA_BASE_URL={$apiKey}";
+                        break;
+                    case 'custom':
+                        $providerKeys = "CUSTOM_AI_BASE_URL={$apiKey}\nCUSTOM_AI_API_KEY=\nCUSTOM_AI_MODEL={$model}";
+                        break;
+                }
+
+                $waLine = $waEnabled
+                    ? "ADMIN_WHATSAPP_NUMBER={$waNumber}\nADMIN_WHATSAPP_NUMBERS="
+                    : "ADMIN_WHATSAPP_NUMBER=\nADMIN_WHATSAPP_NUMBERS=";
+
+                $env = <<<ENV
 # ============================================================
 # SuperClaw — Environment Configuration
 # Generated by PHP Setup Wizard
@@ -154,22 +250,35 @@ MAX_CONCURRENT_AGENTS=5
 SUBAGENT_TIMEOUT_MS=600000
 ENV;
 
-            $written = file_put_contents(ENV_FILE, $env);
-            if ($written !== false) {
-                echo json_encode(['success' => true, 'message' => '.env file written successfully.']);
-            } else {
-                echo json_encode(['error' => 'Failed to write .env file. Check PHP write permissions on ' . PROJECT_ROOT]);
-            }
-            break;
+                $written = file_put_contents(ENV_FILE, $env);
+                if ($written !== false) {
+                    echo json_encode(['success' => true, 'message' => '.env file written successfully.']);
+                } else {
+                    echo json_encode(['error' => 'Failed to write .env file. Check PHP write permissions on ' . PROJECT_ROOT]);
+                }
+                break;
 
-        case 'start_pm2':
-            set_time_limit(60);
-            $output = shell_exec('cd ' . escapeshellarg(PROJECT_ROOT) . ' && pm2 start ecosystem.config.js 2>&1 && pm2 save 2>&1');
-            echo json_encode(['output' => $output ?: '(no output)']);
-            break;
+            case 'start_pm2':
+                ob_end_clean();
+                set_time_limit(60);
 
-        default:
-            echo json_encode(['error' => 'Unknown action']);
+                if (!canRunShell()) {
+                    echo json_encode(['error' => 'shell_exec is disabled. Enable it in aaPanel → PHP → Disable Functions.', 'output' => '']);
+                    break;
+                }
+
+                $pm2    = findBinary('pm2');
+                $output = @shell_exec('cd ' . escapeshellarg(PROJECT_ROOT) . " && {$pm2} start ecosystem.config.js 2>&1 && {$pm2} save 2>&1");
+                echo json_encode(['output' => $output ?: 'No output (shell_exec may be disabled)']);
+                break;
+
+            default:
+                ob_end_clean();
+                echo json_encode(['error' => 'Unknown action']);
+        }
+    } catch (Exception $e) {
+        ob_end_clean();
+        echo json_encode(['error' => $e->getMessage()]);
     }
     exit;
 }
