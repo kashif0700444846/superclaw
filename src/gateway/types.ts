@@ -50,6 +50,14 @@ export interface ConversationMessage {
   timestamp: Date;
 }
 
+/** A single fallback AI provider entry used by FunctionCaller failover logic. */
+export interface FallbackModel {
+  provider: 'openai' | 'anthropic' | 'groq' | 'ollama' | 'custom';
+  model: string;
+  apiKey?: string;
+  baseUrl?: string;
+}
+
 export interface AgentConfig {
   agentName: string;
   aiProvider: 'openai' | 'anthropic' | 'groq' | 'ollama' | 'custom';
@@ -76,4 +84,10 @@ export interface AgentConfig {
   maxAiCallsPerMinute: number;
   maxConcurrentTools: number;
   maxConcurrentAgents: number;
+  /** Ordered list of fallback AI providers tried when the primary fails */
+  fallbackModels?: FallbackModel[];
+  /** Max retry attempts for transient errors (default: 3) */
+  aiMaxRetries: number;
+  /** Base delay in ms for exponential backoff (default: 1000) */
+  aiRetryDelayMs: number;
 }

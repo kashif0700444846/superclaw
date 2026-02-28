@@ -1,43 +1,150 @@
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import axios from 'axios';
-import { ConversationMessage, Platform } from '../gateway/types';
+import { ConversationMessage, FallbackModel, Platform } from '../gateway/types';
 import { toolRegistry } from './ToolRegistry';
 import { config } from '../config';
 import { logger } from '../logger';
 
+export interface ToolCallRecord {
+  name: string;
+  args: string; // JSON.stringify of args
+  result: string; // JSON.stringify of result
+}
+
 export interface FunctionCallerResult {
   response: string;
   toolsUsed: string[];
+  /** Count of tools called this turn (used by Brain for hallucination enforcement) */
+  toolsCalledCount: number;
+  /** Full history of tool calls made this turn */
+  toolCallHistory: ToolCallRecord[];
 }
 
 const MAX_ITERATIONS = 10;
-
-/**
- * Returns true if the text sounds like the AI is claiming to have done something
- * without actually executing any tools (hallucination indicator).
- */
-function looksLikeHallucination(text: string): boolean {
-  const lower = text.toLowerCase();
-  const claimPhrases = [
-    "i have", "i've", "i've", "i created", "i wrote", "i built",
-    "i installed", "i configured", "i set up", "i deployed",
-    "i updated", "i modified", "i deleted", "i removed",
-    "i ran", "i executed", "i started", "i stopped",
-    "done", "completed", "finished", "accomplished",
-    "successfully created", "successfully installed",
-    "successfully configured", "successfully deployed",
-  ];
-  return claimPhrases.some((phrase) => lower.includes(phrase));
-}
-
-const HALLUCINATION_DISCLAIMER =
-  '\n\n⚠️ *[Note: I described what I would do but did not execute it. Please ask me again and I will use my tools to actually do it.]*';
 
 // Inline types for the old Anthropic SDK (0.17.x) which lacks tool-use support
 interface AnthropicMessageParam {
   role: 'user' | 'assistant';
   content: string;
+}
+
+// ---------------------------------------------------------------------------
+// Retry / failover helpers
+// ---------------------------------------------------------------------------
+
+/** Returns true if the error is a rate-limit or server-side transient error. */
+function isRetryableError(err: unknown): boolean {
+  const status = (err as { status?: number })?.status ?? 0;
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    status === 429 ||
+    status === 500 ||
+    status === 503 ||
+    msg.includes('429') ||
+    msg.includes('rate limit') ||
+    msg.includes('Rate limit') ||
+    msg.includes('overloaded') ||
+    msg.includes('server error')
+  );
+}
+
+/** Sleep for `ms` milliseconds. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Build an OpenAI-compatible client for a given fallback model entry.
+ * Returns null if the provider cannot be initialised (missing credentials).
+ */
+function buildFallbackClient(fb: FallbackModel): OpenAI | null {
+  const browserHeaders = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Accept': 'application/json',
+    'Accept-Language': 'en-US,en;q=0.9',
+  };
+
+  switch (fb.provider) {
+    case 'openai':
+      if (!fb.apiKey && !config.openaiApiKey) return null;
+      return new OpenAI({
+        apiKey: fb.apiKey || config.openaiApiKey || '',
+        defaultHeaders: browserHeaders,
+      });
+    case 'groq':
+      if (!fb.apiKey && !config.groqApiKey) return null;
+      return new OpenAI({
+        apiKey: fb.apiKey || config.groqApiKey || '',
+        baseURL: 'https://api.groq.com/openai/v1',
+        defaultHeaders: browserHeaders,
+      });
+    case 'custom':
+      return new OpenAI({
+        apiKey: fb.apiKey || config.customAiApiKey || 'none',
+        baseURL: fb.baseUrl || config.customAiBaseUrl || '',
+        defaultHeaders: browserHeaders,
+      });
+    case 'ollama':
+      return new OpenAI({
+        apiKey: 'ollama',
+        baseURL: fb.baseUrl || config.ollamaBaseUrl || 'http://localhost:11434/v1',
+        defaultHeaders: browserHeaders,
+      });
+    default:
+      return null;
+  }
+}
+
+/**
+ * Execute `fn` with exponential-backoff retries, then try each fallback model
+ * in order if the primary keeps failing with retryable errors.
+ */
+async function withRetryAndFailover<T>(
+  primaryCall: () => Promise<T>,
+  fallbackCall: ((fb: FallbackModel, client: OpenAI) => Promise<T>) | null,
+  fallbacks: FallbackModel[],
+  maxRetries: number,
+  baseDelayMs: number,
+): Promise<T> {
+  let lastError: unknown;
+
+  // --- Primary provider with retries ---
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await primaryCall();
+    } catch (err: unknown) {
+      lastError = err;
+      if (!isRetryableError(err) || attempt === maxRetries) break;
+      const delay = baseDelayMs * Math.pow(2, attempt);
+      logger.warn(`AI call failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms`, {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      await sleep(delay);
+    }
+  }
+
+  // --- Fallback providers (one attempt each, no retry) ---
+  if (fallbackCall && fallbacks.length > 0) {
+    for (const fb of fallbacks) {
+      const client = buildFallbackClient(fb);
+      if (!client) {
+        logger.warn(`Skipping fallback provider "${fb.provider}" — could not build client (missing credentials?)`);
+        continue;
+      }
+      try {
+        logger.warn(`Trying fallback model: ${fb.provider}/${fb.model}`);
+        return await fallbackCall(fb, client);
+      } catch (err: unknown) {
+        lastError = err;
+        logger.warn(`Fallback ${fb.provider}/${fb.model} also failed`, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  throw lastError;
 }
 
 export class FunctionCaller {
@@ -100,10 +207,13 @@ export class FunctionCaller {
       return {
         response: '⚠️ AI rate limit reached. Please wait a moment before sending more messages.',
         toolsUsed: [],
+        toolsCalledCount: 0,
+        toolCallHistory: [],
       };
     }
 
     const toolsUsed: string[] = [];
+    const toolCallHistory: ToolCallRecord[] = [];
 
     if (config.aiProvider === 'openai' || config.aiProvider === 'groq') {
       return this.runOpenAiLoop(
@@ -114,6 +224,7 @@ export class FunctionCaller {
         chatId,
         userId,
         toolsUsed,
+        toolCallHistory,
         MAX_ITERATIONS
       );
     } else if (config.aiProvider === 'anthropic') {
@@ -121,10 +232,11 @@ export class FunctionCaller {
         systemPrompt,
         history,
         userMessage,
-        toolsUsed
+        toolsUsed,
+        toolCallHistory
       );
     } else if (config.aiProvider === 'ollama') {
-      return this.runOllamaLoop(systemPrompt, history, userMessage, toolsUsed);
+      return this.runOllamaLoop(systemPrompt, history, userMessage, toolsUsed, toolCallHistory);
     } else if (config.aiProvider === 'custom') {
       return this.runCustomLoop(
         systemPrompt,
@@ -134,11 +246,32 @@ export class FunctionCaller {
         chatId,
         userId,
         toolsUsed,
+        toolCallHistory,
         MAX_ITERATIONS
       );
     }
 
-    return { response: 'No AI provider configured.', toolsUsed: [] };
+    return {
+      response: 'No AI provider configured.',
+      toolsUsed: [],
+      toolsCalledCount: 0,
+      toolCallHistory: [],
+    };
+  }
+
+  /**
+   * Check for tool call loops: if the last N calls are identical (same tool + same args),
+   * return a loop-detected message. Returns null if no loop detected.
+   */
+  private detectToolLoop(history: ToolCallRecord[], repeatThreshold = 3): string | null {
+    if (history.length < repeatThreshold) return null;
+    const last = history.slice(-repeatThreshold);
+    const first = last[0];
+    const allSame = last.every((r) => r.name === first.name && r.args === first.args);
+    if (allSame) {
+      return `Tool loop detected: "${first.name}" was called ${repeatThreshold} times in a row with identical arguments. Stopping to prevent infinite loop.`;
+    }
+    return null;
   }
 
   private async runOpenAiLoop(
@@ -149,10 +282,16 @@ export class FunctionCaller {
     chatId: string,
     userId: string,
     toolsUsed: string[],
+    toolCallHistory: ToolCallRecord[],
     maxIterations: number
   ): Promise<FunctionCallerResult> {
     if (!this.openaiClient) {
-      return { response: 'OpenAI/Groq client not initialized.', toolsUsed: [] };
+      return {
+        response: 'OpenAI/Groq client not initialized.',
+        toolsUsed: [],
+        toolsCalledCount: 0,
+        toolCallHistory: [],
+      };
     }
 
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
@@ -171,17 +310,35 @@ export class FunctionCaller {
     ];
 
     const tools = toolRegistry.toOpenAiFunctions();
+    const fallbacks = config.fallbackModels ?? [];
+    const maxRetries = config.aiMaxRetries;
+    const baseDelay = config.aiRetryDelayMs;
 
     for (let i = 0; i < maxIterations; i++) {
       logger.info(`FunctionCaller OpenAI iteration ${i + 1}/${maxIterations}`);
 
-      const response = await this.openaiClient.chat.completions.create({
-        model: config.aiModel,
-        messages,
-        tools,
-        tool_choice: 'auto',
-        max_tokens: 4096,
-      });
+      const primaryClient = this.openaiClient;
+      const primaryModel = config.aiModel;
+
+      const response = await withRetryAndFailover(
+        () => primaryClient.chat.completions.create({
+          model: primaryModel,
+          messages,
+          tools,
+          tool_choice: 'auto',
+          max_tokens: 4096,
+        }),
+        (fb, fbClient) => fbClient.chat.completions.create({
+          model: fb.model,
+          messages,
+          tools,
+          tool_choice: 'auto',
+          max_tokens: 4096,
+        }),
+        fallbacks,
+        maxRetries,
+        baseDelay,
+      );
 
       const choice = response.choices[0];
       if (!choice) break;
@@ -190,20 +347,14 @@ export class FunctionCaller {
       messages.push(assistantMessage as OpenAI.Chat.ChatCompletionMessageParam);
 
       if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
-        // AI returned text without calling any tools
+        // AI returned text without calling any tools — return as-is
+        // Brain.ts will handle hallucination enforcement
         const responseText = assistantMessage.content || 'Task completed.';
-        // If no tools were used at all and the response sounds like a claim of action,
-        // append a disclaimer to warn the user about potential hallucination
-        if (toolsUsed.length === 0 && looksLikeHallucination(responseText)) {
-          logger.warn('FunctionCaller: AI returned action-claim text without executing any tools (possible hallucination)');
-          return {
-            response: responseText + HALLUCINATION_DISCLAIMER,
-            toolsUsed,
-          };
-        }
         return {
           response: responseText,
           toolsUsed,
+          toolsCalledCount: toolsUsed.length,
+          toolCallHistory,
         };
       }
 
@@ -229,6 +380,25 @@ export class FunctionCaller {
           toolResult = await tool.execute(toolParams);
         }
 
+        const record: ToolCallRecord = {
+          name: toolName,
+          args: JSON.stringify(toolParams),
+          result: JSON.stringify(toolResult),
+        };
+        toolCallHistory.push(record);
+
+        // Check for tool loop after recording
+        const loopMessage = this.detectToolLoop(toolCallHistory);
+        if (loopMessage) {
+          logger.warn(`FunctionCaller: ${loopMessage}`);
+          return {
+            response: `⚠️ ${loopMessage}`,
+            toolsUsed,
+            toolsCalledCount: toolsUsed.length,
+            toolCallHistory,
+          };
+        }
+
         messages.push({
           role: 'tool',
           tool_call_id: toolCall.id,
@@ -240,6 +410,8 @@ export class FunctionCaller {
     return {
       response: '⚠️ Maximum iterations reached. Task may be incomplete.',
       toolsUsed,
+      toolsCalledCount: toolsUsed.length,
+      toolCallHistory,
     };
   }
 
@@ -252,10 +424,16 @@ export class FunctionCaller {
     systemPrompt: string,
     history: ConversationMessage[],
     userMessage: string,
-    toolsUsed: string[]
+    toolsUsed: string[],
+    toolCallHistory: ToolCallRecord[]
   ): Promise<FunctionCallerResult> {
     if (!this.anthropicClient) {
-      return { response: 'Anthropic client not initialized.', toolsUsed: [] };
+      return {
+        response: 'Anthropic client not initialized.',
+        toolsUsed: [],
+        toolsCalledCount: 0,
+        toolCallHistory: [],
+      };
     }
 
     const toolDescriptions = toolRegistry.toDescriptionList();
@@ -277,16 +455,48 @@ export class FunctionCaller {
     conversationHistory.push({ role: 'user', content: userMessage });
 
     const maxIterations = 10;
+    const fallbacks = config.fallbackModels ?? [];
+    const maxRetries = config.aiMaxRetries;
+    const baseDelay = config.aiRetryDelayMs;
+    const anthropicClient = this.anthropicClient;
 
     for (let i = 0; i < maxIterations; i++) {
       logger.debug(`FunctionCaller Anthropic iteration ${i + 1}`);
 
-      const response = await (this.anthropicClient.messages as any).create({
-        model: config.aiModel,
-        max_tokens: 4096,
-        system: reactSystemPrompt,
-        messages: conversationHistory,
-      });
+      const response: { content: any } = await withRetryAndFailover(
+        () => (anthropicClient.messages as any).create({
+          model: config.aiModel,
+          max_tokens: 4096,
+          system: reactSystemPrompt,
+          messages: conversationHistory,
+        }) as Promise<{ content: any }>,
+        (fb, fbClient) => {
+          if (fb.provider !== 'anthropic') {
+            return fbClient.chat.completions.create({
+              model: fb.model,
+              messages: [
+                { role: 'system', content: reactSystemPrompt },
+                ...conversationHistory.map((m) => ({
+                  role: m.role as 'user' | 'assistant',
+                  content: m.content,
+                })),
+              ],
+              max_tokens: 4096,
+            }).then((r): { content: any } => ({
+              content: [{ type: 'text', text: r.choices[0]?.message?.content ?? '' }],
+            }));
+          }
+          return (anthropicClient.messages as any).create({
+            model: fb.model,
+            max_tokens: 4096,
+            system: reactSystemPrompt,
+            messages: conversationHistory,
+          }) as Promise<{ content: any }>;
+        },
+        fallbacks,
+        maxRetries,
+        baseDelay,
+      );
 
       const assistantText: string =
         Array.isArray(response.content)
@@ -300,13 +510,14 @@ export class FunctionCaller {
       const toolMatch = assistantText.match(/```tool\s*\n([\s\S]*?)\n```/);
 
       if (!toolMatch) {
-        // No tool call — final answer
+        // No tool call — final answer; Brain.ts handles hallucination enforcement
         const responseText = assistantText.trim() || 'Task completed.';
-        if (toolsUsed.length === 0 && looksLikeHallucination(responseText)) {
-          logger.warn('FunctionCaller (anthropic): AI returned action-claim text without executing any tools (possible hallucination)');
-          return { response: responseText + HALLUCINATION_DISCLAIMER, toolsUsed };
-        }
-        return { response: responseText, toolsUsed };
+        return {
+          response: responseText,
+          toolsUsed,
+          toolsCalledCount: toolsUsed.length,
+          toolCallHistory,
+        };
       }
 
       // Parse tool call
@@ -320,6 +531,8 @@ export class FunctionCaller {
         return {
           response: `Failed to parse tool invocation: ${toolMatch[1]}`,
           toolsUsed,
+          toolsCalledCount: toolsUsed.length,
+          toolCallHistory,
         };
       }
 
@@ -335,6 +548,25 @@ export class FunctionCaller {
         toolResult = await tool.execute(toolParams);
       }
 
+      const record: ToolCallRecord = {
+        name: toolName,
+        args: JSON.stringify(toolParams),
+        result: JSON.stringify(toolResult),
+      };
+      toolCallHistory.push(record);
+
+      // Check for tool loop
+      const loopMessage = this.detectToolLoop(toolCallHistory);
+      if (loopMessage) {
+        logger.warn(`FunctionCaller (anthropic): ${loopMessage}`);
+        return {
+          response: `⚠️ ${loopMessage}`,
+          toolsUsed,
+          toolsCalledCount: toolsUsed.length,
+          toolCallHistory,
+        };
+      }
+
       const toolResultStr = JSON.stringify(toolResult);
 
       // Append assistant turn and tool result as user turn
@@ -345,14 +577,20 @@ export class FunctionCaller {
       });
     }
 
-    return { response: 'Maximum iterations reached.', toolsUsed };
+    return {
+      response: 'Maximum iterations reached.',
+      toolsUsed,
+      toolsCalledCount: toolsUsed.length,
+      toolCallHistory,
+    };
   }
 
   private async runOllamaLoop(
     systemPrompt: string,
     history: ConversationMessage[],
     userMessage: string,
-    toolsUsed: string[]
+    toolsUsed: string[],
+    toolCallHistory: ToolCallRecord[]
   ): Promise<FunctionCallerResult> {
     const toolDescriptions = toolRegistry.toDescriptionList();
     const fullPrompt =
@@ -360,20 +598,43 @@ export class FunctionCaller {
       `Conversation history:\n${history.map((m) => `${m.role}: ${m.content}`).join('\n')}\n\n` +
       `User: ${userMessage}\n\nAssistant:`;
 
+    const fallbacks = config.fallbackModels ?? [];
+    const maxRetries = config.aiMaxRetries;
+    const baseDelay = config.aiRetryDelayMs;
+    const ollamaUrl = config.ollamaBaseUrl;
+    const primaryModel = config.aiModel;
+
     try {
-      const response = await axios.post(`${config.ollamaBaseUrl}/api/generate`, {
-        model: config.aiModel,
-        prompt: fullPrompt,
-        stream: false,
-      });
+      const response = await withRetryAndFailover(
+        () => axios.post(`${ollamaUrl}/api/generate`, {
+          model: primaryModel,
+          prompt: fullPrompt,
+          stream: false,
+        }),
+        (fb, fbClient) => fbClient.chat.completions.create({
+          model: fb.model,
+          messages: [{ role: 'user', content: fullPrompt }],
+          max_tokens: 4096,
+        }).then((r) => ({ data: { response: r.choices[0]?.message?.content ?? '' } })),
+        fallbacks,
+        maxRetries,
+        baseDelay,
+      );
 
       return {
         response: response.data.response || 'No response from Ollama.',
         toolsUsed,
+        toolsCalledCount: toolsUsed.length,
+        toolCallHistory,
       };
     } catch (error: any) {
-      logger.error('Ollama request failed', { error });
-      return { response: `Ollama error: ${error.message}`, toolsUsed: [] };
+      logger.error('Ollama request failed (all retries and fallbacks exhausted)', { error });
+      return {
+        response: `Ollama error: ${error.message}`,
+        toolsUsed: [],
+        toolsCalledCount: 0,
+        toolCallHistory: [],
+      };
     }
   }
 
@@ -385,10 +646,16 @@ export class FunctionCaller {
     chatId: string,
     userId: string,
     toolsUsed: string[],
+    toolCallHistory: ToolCallRecord[],
     maxIterations: number
   ): Promise<FunctionCallerResult> {
     if (!this.openaiClient) {
-      return { response: 'Custom AI client not initialized. Check CUSTOM_AI_BASE_URL.', toolsUsed: [] };
+      return {
+        response: 'Custom AI client not initialized. Check CUSTOM_AI_BASE_URL.',
+        toolsUsed: [],
+        toolsCalledCount: 0,
+        toolCallHistory: [],
+      };
     }
 
     const model = config.customAiModel || config.aiModel;
@@ -409,17 +676,33 @@ export class FunctionCaller {
     ];
 
     const tools = toolRegistry.toOpenAiFunctions();
+    const fallbacks = config.fallbackModels ?? [];
+    const maxRetries = config.aiMaxRetries;
+    const baseDelay = config.aiRetryDelayMs;
+    const primaryClient = this.openaiClient;
 
     for (let i = 0; i < maxIterations; i++) {
       logger.info(`FunctionCaller Custom iteration ${i + 1}/${maxIterations}`);
 
-      const response = await this.openaiClient.chat.completions.create({
-        model,
-        messages,
-        tools,
-        tool_choice: 'auto',
-        max_tokens: 4096,
-      });
+      const response = await withRetryAndFailover(
+        () => primaryClient.chat.completions.create({
+          model,
+          messages,
+          tools,
+          tool_choice: 'auto',
+          max_tokens: 4096,
+        }),
+        (fb, fbClient) => fbClient.chat.completions.create({
+          model: fb.model,
+          messages,
+          tools,
+          tool_choice: 'auto',
+          max_tokens: 4096,
+        }),
+        fallbacks,
+        maxRetries,
+        baseDelay,
+      );
 
       const choice = response.choices[0];
       if (!choice) break;
@@ -429,16 +712,11 @@ export class FunctionCaller {
 
       if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
         const responseText = assistantMessage.content || 'Task completed.';
-        if (toolsUsed.length === 0 && looksLikeHallucination(responseText)) {
-          logger.warn('FunctionCaller (custom): AI returned action-claim text without executing any tools (possible hallucination)');
-          return {
-            response: responseText + HALLUCINATION_DISCLAIMER,
-            toolsUsed,
-          };
-        }
         return {
           response: responseText,
           toolsUsed,
+          toolsCalledCount: toolsUsed.length,
+          toolCallHistory,
         };
       }
 
@@ -464,6 +742,25 @@ export class FunctionCaller {
           toolResult = await tool.execute(toolParams);
         }
 
+        const record: ToolCallRecord = {
+          name: toolName,
+          args: JSON.stringify(toolParams),
+          result: JSON.stringify(toolResult),
+        };
+        toolCallHistory.push(record);
+
+        // Check for tool loop
+        const loopMessage = this.detectToolLoop(toolCallHistory);
+        if (loopMessage) {
+          logger.warn(`FunctionCaller (custom): ${loopMessage}`);
+          return {
+            response: `⚠️ ${loopMessage}`,
+            toolsUsed,
+            toolsCalledCount: toolsUsed.length,
+            toolCallHistory,
+          };
+        }
+
         messages.push({
           role: 'tool',
           tool_call_id: toolCall.id,
@@ -475,6 +772,8 @@ export class FunctionCaller {
     return {
       response: '⚠️ Maximum iterations reached. Task may be incomplete.',
       toolsUsed,
+      toolsCalledCount: toolsUsed.length,
+      toolCallHistory,
     };
   }
 }

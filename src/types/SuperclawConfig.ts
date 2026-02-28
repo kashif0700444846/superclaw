@@ -15,7 +15,13 @@ export type ToolName =
   | 'memory_write'
   | 'ai_query'
   | 'web_search'
-  | 'code_executor';
+  | 'code_executor'
+  | 'browser_automate'
+  | 'termux_api'
+  | 'root_shell'
+  | 'android_info'
+  | 'daemon_manager'
+  | 'mcp_manager';
 
 export interface SuperclawConfig {
   /** Schema version for future migrations */
@@ -38,4 +44,11 @@ export interface SuperclawConfig {
 
   /** Timestamp when config was generated */
   generatedAt: string;
+
+  /** Android/Termux capability detection results (populated at startup) */
+  androidSupport?: {
+    termuxApiAvailable: boolean;
+    rootAvailable: boolean;
+    termuxBootAvailable: boolean;
+  };
 }

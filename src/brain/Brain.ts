@@ -8,17 +8,78 @@ import { logger } from '../logger';
 import { gateway } from '../gateway/Gateway';
 import { agentOrchestrator } from '../agents/AgentOrchestrator';
 
-/** Maximum number of conversation history messages sent to the AI per request. */
+/**
+ * Maximum number of conversation history messages sent to the AI per request.
+ * If history exceeds CONTEXT_WINDOW_MAX_MESSAGES, it is trimmed to
+ * CONTEXT_WINDOW_TRIM_TO messages (keeping the system prompt).
+ */
 const MAX_HISTORY_MESSAGES = 20;
+const CONTEXT_WINDOW_MAX_MESSAGES = 40;
+const CONTEXT_WINDOW_TRIM_TO = 20;
 
-/** Words that suggest the AI claimed to do something without using tools. */
-const HALLUCINATION_WORDS = [
-  'i have', "i've", 'i created', 'i wrote', 'i built',
-  'i installed', 'i configured', 'i set up', 'i deployed',
-  'i updated', 'i modified', 'i deleted', 'i removed',
-  'i ran', 'i executed', 'i started', 'i stopped',
-  'done', 'completed', 'finished', 'accomplished',
+/**
+ * Maximum number of enforcement re-prompts when the AI returns a text-only
+ * response for an action request (hallucination enforcement).
+ */
+const MAX_ENFORCEMENT_RETRIES = 2;
+
+/**
+ * Action keywords — if the user's message contains any of these, it is
+ * considered an action request and the AI MUST call a tool to respond.
+ */
+const ACTION_KEYWORDS = [
+  'create', 'make', 'write', 'run', 'execute', 'install', 'setup', 'configure',
+  'delete', 'remove', 'update', 'change', 'modify', 'edit', 'add', 'build',
+  'deploy', 'start', 'stop', 'restart', 'download', 'upload', 'send', 'move',
+  'copy', 'rename', 'fix', 'implement', 'generate', 'set up', 'set', 'enable',
+  'disable', 'open', 'close', 'connect', 'disconnect', 'save', 'load',
+  'install', 'uninstall', 'upgrade', 'downgrade', 'check', 'show', 'list',
+  'search', 'find', 'get', 'fetch', 'pull', 'push', 'clone', 'init',
 ];
+
+/**
+ * Completion claim patterns — if the AI response matches any of these AND
+ * no tools were called, it is a hallucination.
+ */
+const COMPLETION_CLAIM_PATTERN =
+  /\b(I('ve| have) (created|written|run|executed|installed|set up|configured|done|completed|built|deployed|started|stopped|deleted|removed|updated|changed|modified|added|generated|saved|loaded|sent|moved|copied|renamed|fixed|implemented|enabled|disabled|set|opened|closed|connected|disconnected|fetched|pulled|pushed|cloned|initialized|upgraded|downgraded|uninstalled|searched|found|checked|listed|showed|got))\b/i;
+
+const DONE_PATTERN = /^(Done|Complete|Finished|All set|Ready|Success|Completed)[.!]?\s*$/im;
+
+/**
+ * Returns true if the user's message is requesting an action (not just a question
+ * or greeting). Used to decide whether to enforce tool usage.
+ */
+function isActionRequest(message: string): boolean {
+  const lower = message.toLowerCase();
+
+  // Exclude pure greetings and questions
+  const greetingPatterns = [
+    /^(hello|hi|hey|good morning|good afternoon|good evening|how are you|what's up|sup)\b/i,
+    /^(thanks|thank you|thx|ty)\b/i,
+    /^(what can you do|what are you|who are you|tell me about yourself)\b/i,
+  ];
+  for (const pattern of greetingPatterns) {
+    if (pattern.test(message.trim())) return false;
+  }
+
+  // Check for action keywords
+  return ACTION_KEYWORDS.some((keyword) => {
+    // Use word boundary matching to avoid false positives
+    const regex = new RegExp(`\\b${keyword.replace(/\s+/g, '\\s+')}\\b`, 'i');
+    return regex.test(lower);
+  });
+}
+
+/**
+ * Returns true if the AI response appears to be a hallucination:
+ * - No tools were called this turn (toolsCalledCount === 0)
+ * - AND the response contains completion claim language
+ */
+function detectsHallucination(response: string, toolsCalledCount: number): boolean {
+  if (toolsCalledCount > 0) return false;
+  return COMPLETION_CLAIM_PATTERN.test(response) || DONE_PATTERN.test(response);
+}
 
 export class Brain {
   async process(message: NormalizedMessage): Promise<NormalizedResponse[]> {
@@ -34,25 +95,36 @@ export class Brain {
       }
 
       // STEP 2: Load conversation history (capped at MAX_HISTORY_MESSAGES)
-      const history = conversationDB.getHistory(userId, platform, MAX_HISTORY_MESSAGES);
+      let history = conversationDB.getHistory(userId, platform, MAX_HISTORY_MESSAGES);
 
-      // STEP 3: Build system prompt
+      // STEP 3: Context window guard — trim if history is too long
+      if (history.length > CONTEXT_WINDOW_MAX_MESSAGES) {
+        logger.warn('Brain: context window guard triggered — trimming conversation history', {
+          before: history.length,
+          after: CONTEXT_WINDOW_TRIM_TO,
+          userId,
+          platform,
+        });
+        history = history.slice(-CONTEXT_WINDOW_TRIM_TO);
+      }
+
+      // STEP 4: Build system prompt
       const systemPrompt = promptBuilder.buildSystemPrompt(platform, userId);
 
-      // STEP 4: Wire orchestrator to push sub-agent progress to this user/chat
-      agentOrchestrator.setNotifyCallback((text: string) => {
+      // STEP 5: Wire orchestrator to push sub-agent progress to this user/chat
+      agentOrchestrator.setNotifyCallback((notifyText: string) => {
         gateway.sendResponse({
           platform,
           chatId,
-          text,
+          text: notifyText,
           parseMode: platform === 'telegram' ? 'Markdown' : 'plain',
         }).catch((err) => {
           logger.warn('Brain: failed to send sub-agent notification', { err });
         });
       });
 
-      // STEP 5: Run AI decision loop
-      const result = await functionCaller.run(
+      // STEP 6: Run AI decision loop with hallucination enforcement
+      let result = await functionCaller.run(
         systemPrompt,
         history,
         text,
@@ -61,7 +133,73 @@ export class Brain {
         userId
       );
 
-      // STEP 6: Save conversation to DB
+      // STEP 7: Hallucination enforcement loop
+      // If the AI returned a text-only response for an action request and the
+      // response contains completion claims, re-prompt up to MAX_ENFORCEMENT_RETRIES times.
+      if (isActionRequest(text)) {
+        let enforcementAttempts = 0;
+
+        while (
+          enforcementAttempts < MAX_ENFORCEMENT_RETRIES &&
+          detectsHallucination(result.response, result.toolsCalledCount)
+        ) {
+          enforcementAttempts++;
+          logger.warn(
+            `Brain: hallucination detected — AI claimed action without tool call (enforcement attempt ${enforcementAttempts}/${MAX_ENFORCEMENT_RETRIES})`,
+            {
+              userId,
+              platform,
+              responseSnippet: result.response.substring(0, 200),
+              toolsCalledCount: result.toolsCalledCount,
+            }
+          );
+
+          const enforcementMessage =
+            `You described performing an action but did not call any tools. ` +
+            `You MUST call the appropriate tool to actually perform the action. ` +
+            `The original request was: "${text}". ` +
+            `Please call the tool now — do not describe what you would do, just call it.`;
+
+          // Build an augmented history that includes the original user message,
+          // the hallucinated assistant response, and the enforcement prompt
+          const augmentedHistory = [
+            ...history,
+            { role: 'user' as const, content: text, timestamp },
+            { role: 'assistant' as const, content: result.response, timestamp: new Date() },
+          ];
+
+          result = await functionCaller.run(
+            systemPrompt,
+            augmentedHistory,
+            enforcementMessage,
+            platform,
+            chatId,
+            userId
+          );
+        }
+
+        // If still hallucinating after all retries, log a final warning
+        if (detectsHallucination(result.response, result.toolsCalledCount)) {
+          logger.error(
+            'Brain: hallucination enforcement failed — AI still claiming actions without tool calls after max retries',
+            {
+              userId,
+              platform,
+              enforcementAttempts: MAX_ENFORCEMENT_RETRIES,
+              responseSnippet: result.response.substring(0, 200),
+            }
+          );
+        }
+      } else if (result.toolsCalledCount === 0) {
+        // Non-action request with no tools — just log at debug level (normal for greetings/questions)
+        logger.debug('Brain: AI responded without tools (non-action request)', {
+          userId,
+          platform,
+          responseSnippet: result.response.substring(0, 100),
+        });
+      }
+
+      // STEP 8: Save conversation to DB
       conversationDB.addMessage(userId, platform, {
         role: 'user',
         content: text,
@@ -71,7 +209,7 @@ export class Brain {
         content: result.response,
       });
 
-      // STEP 7: Auto-log to memory
+      // STEP 9: Auto-log to memory
       const summary = text.length > 100 ? text.substring(0, 100) + '...' : text;
       const outcome =
         result.toolsUsed.length > 0
@@ -79,20 +217,7 @@ export class Brain {
           : 'Text response (no tools used)';
       memoryManager.appendTodayLog(platform, summary, outcome);
 
-      // STEP 7b: Warn if AI claimed to do something without using any tools
-      if (result.toolsUsed.length === 0) {
-        const lower = result.response.toLowerCase();
-        const hallucinated = HALLUCINATION_WORDS.some((w) => lower.includes(w));
-        if (hallucinated) {
-          logger.warn('Brain: AI response may be a hallucination — claimed action without tool use', {
-            userId,
-            platform,
-            responseSnippet: result.response.substring(0, 200),
-          });
-        }
-      }
-
-      // STEP 8: Format and return response
+      // STEP 10: Format and return response
       const parseMode = platform === 'telegram' ? 'Markdown' : 'plain';
       return [
         {

@@ -1,6 +1,9 @@
+import fs from 'fs';
 import { Tool } from '../gateway/types';
 import { logger } from '../logger';
 import { isToolEnabled } from '../superclawConfig';
+import { mcpManager } from '../mcp/McpManager';
+import { mcpTool } from '../tools/McpTool';
 
 // Core tools — always imported (small, no heavy deps)
 import { SelfUpdateTool } from '../tools/SelfUpdateTool';
@@ -19,6 +22,12 @@ import { memoryReadTool } from '../tools/MemoryReadTool';
 import { memoryWriteTool } from '../tools/MemoryWriteTool';
 import { clearHistoryTool } from '../tools/ClearHistoryTool';
 import { aiQueryTool } from '../tools/AiQueryTool';
+
+// Android / Termux tools
+import { termuxApiTool } from '../tools/TermuxApiTool';
+import { rootShellTool } from '../tools/RootShellTool';
+import { androidInfoTool } from '../tools/AndroidInfoTool';
+import { daemonManagerTool } from '../tools/DaemonManagerTool';
 
 // Sub-agent management tools
 import { spawnAgentTool } from '../tools/SpawnAgentTool';
@@ -57,6 +66,10 @@ export class ToolRegistry {
       checkAgentTool,
       listAgentsTool,
       killAgentTool,
+      // Daemon / service management
+      daemonManagerTool,
+      // MCP server management
+      mcpTool,
     ];
 
     for (const tool of coreTools) {
@@ -92,7 +105,61 @@ export class ToolRegistry {
       logger.debug('code_executor tool disabled by config');
     }
 
+    // Android tools — conditionally registered based on environment
+    const isTermux =
+      !!process.env.TERMUX_VERSION || fs.existsSync('/data/data/com.termux');
+
+    // termux_api — only in Termux environments
+    if (isTermux) {
+      this.tools.set(termuxApiTool.name, termuxApiTool);
+      logger.debug('Registered Android tool: termux_api');
+    } else {
+      logger.debug('termux_api skipped — not a Termux environment');
+    }
+
+    // root_shell — always register (works on Android root and Linux sudo)
+    this.tools.set(rootShellTool.name, rootShellTool);
+    logger.debug('Registered Android tool: root_shell');
+
+    // android_info — always register (gracefully handles non-Android environments)
+    this.tools.set(androidInfoTool.name, androidInfoTool);
+    logger.debug('Registered Android tool: android_info');
+
+    // Optional: browser_automate — only if enabled in config
+    if (isToolEnabled('browser_automate')) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { browserAutomationTool } = require('../tools/BrowserAutomationTool');
+        this.tools.set(browserAutomationTool.name, browserAutomationTool);
+        logger.debug('Registered optional tool: browser_automate');
+      } catch (e: any) {
+        logger.warn('browser_automate tool failed to load', { error: e.message });
+      }
+    } else {
+      logger.debug('browser_automate tool disabled by config');
+    }
+
     logger.info(`ToolRegistry: ${this.tools.size} tools registered`);
+
+    // Start any configured MCP servers in the background (non-blocking)
+    mcpManager.startAll().catch((e: any) => {
+      logger.warn(`McpManager.startAll error: ${e.message}`);
+    });
+  }
+
+  /**
+   * Register all tools currently exposed by connected MCP servers.
+   * Call this after mcpManager.startAll() has resolved.
+   */
+  registerMcpTools(): void {
+    const mcpTools = mcpManager.getMcpTools();
+    for (const tool of mcpTools) {
+      this.tools.set(tool.name, tool);
+      logger.debug(`Registered MCP tool: ${tool.name}`);
+    }
+    if (mcpTools.length > 0) {
+      logger.info(`ToolRegistry: registered ${mcpTools.length} MCP tools`);
+    }
   }
 
   register(tool: Tool): void {

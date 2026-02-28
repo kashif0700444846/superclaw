@@ -2,6 +2,7 @@ import inquirer from 'inquirer';
 import chalk from 'chalk';
 import fs from 'fs';
 import path from 'path';
+import { execSync } from 'child_process';
 import { SuperclawConfig } from '../types/SuperclawConfig';
 
 function sanitizeEnvValue(value: string): string {
@@ -21,6 +22,7 @@ const RAM = {
   whatsappPuppeteer: 450,
   webSearch: 5,
   codeExecutor: 5,
+  browserAutomate: 80,
 };
 
 // Storage estimates in MB
@@ -39,6 +41,7 @@ function calcRam(platforms: string[], driver: string, tools: string[]): number {
   }
   if (tools.includes('web_search')) ram += RAM.webSearch;
   if (tools.includes('code_executor')) ram += RAM.codeExecutor;
+  if (tools.includes('browser_automate')) ram += RAM.browserAutomate;
   return ram;
 }
 
@@ -66,6 +69,32 @@ function printBanner(): void {
   console.log(chalk.cyan('╚══════════════════════════════════════════╝\n'));
   console.log(chalk.gray('SuperClaw is designed to run on minimal resources.'));
   console.log(chalk.gray('Choose only what you need to keep memory usage low.\n'));
+}
+
+// Detect if running on Termux
+function isTermux(): boolean {
+  return !!(
+    process.env.TERMUX_VERSION ||
+    process.env.PREFIX?.includes('termux') ||
+    process.cwd().includes('/data/data/com.termux')
+  );
+}
+
+// Auto-detect Chromium path for Termux
+function detectChromiumPath(): string | undefined {
+  const possiblePaths = [
+    process.env.PREFIX + '/bin/chromium',
+    process.env.PREFIX + '/bin/chromium-browser',
+    '/data/data/com.termux/files/usr/bin/chromium',
+    '/data/data/com.termux/files/usr/bin/chromium-browser',
+  ];
+  
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+      return p;
+    }
+  }
+  return undefined;
 }
 
 function getDefaultModel(provider: string): string {
@@ -174,6 +203,17 @@ async function runWizard(): Promise<void> {
   console.log(chalk.bold.cyan('\n🛠️  STEP 3: Optional Tools\n'));
   console.log(chalk.gray('Core tools are always enabled. Choose optional extras:\n'));
 
+  const runningOnTermux = isTermux();
+  const chromiumPath = runningOnTermux ? detectChromiumPath() : undefined;
+  let termuxConfig: { chromiumPath?: string } = {};
+  
+  if (runningOnTermux) {
+    console.log(chalk.green('📱 Termux environment detected!\n'));
+    if (chromiumPath) {
+      console.log(chalk.green(`✓ Chromium found at: ${chromiumPath}\n`));
+    }
+  }
+
   const { optionalTools } = await inquirer.prompt<{ optionalTools: string[] }>([
     {
       type: 'checkbox',
@@ -189,6 +229,13 @@ async function runWizard(): Promise<void> {
           name: `code_executor  ${chalk.gray('(Python/Bash/Node.js sandbox — +5 MB)')}`,
           value: 'code_executor',
           checked: true,
+        },
+        {
+          name: runningOnTermux 
+            ? `browser_automate  ${chalk.green('(✓ Chromium ready — +80 MB)')}`
+            : `browser_automate  ${chalk.yellow('(Playwright required — +80 MB)')}`,
+          value: 'browser_automate',
+          checked: runningOnTermux && !!chromiumPath,
         },
       ],
     },
@@ -439,6 +486,67 @@ async function runWizard(): Promise<void> {
     apiAnswers.customAiApiKey = sanitizeEnvValue(customAiApiKey);
   }
 
+  // ── STEP 4b: AI Failover Configuration (Optional) ──────
+  console.log(chalk.bold.cyan('\n🔄 AI Failover Configuration (Optional)\n'));
+  console.log(chalk.gray('Configure fallback AI providers for automatic failover.\n'));
+
+  const { configureFallback } = await inquirer.prompt<{ configureFallback: boolean }>([
+    {
+      type: 'confirm',
+      name: 'configureFallback',
+      message: 'Configure fallback AI providers for automatic failover?',
+      default: false,
+    },
+  ]);
+
+  let fallbackProvider = '';
+  let fallbackModel = '';
+  let fallbackApiKey = '';
+
+  if (configureFallback) {
+    const fallbackAnswers = await inquirer.prompt<{
+      fallbackProvider: string;
+      fallbackModel: string;
+      fallbackApiKey: string;
+    }>([
+      {
+        type: 'list',
+        name: 'fallbackProvider',
+        message: 'Fallback provider 1:',
+        choices: [
+          { name: 'OpenAI', value: 'openai' },
+          { name: 'Anthropic', value: 'anthropic' },
+          { name: 'Groq', value: 'groq' },
+          { name: 'Ollama', value: 'ollama' },
+          { name: 'None', value: '' },
+        ],
+        default: 'groq',
+      },
+      {
+        type: 'input',
+        name: 'fallbackModel',
+        message: 'Fallback model 1:',
+        default: (answers: any) => getDefaultModel(answers.fallbackProvider || 'groq'),
+        when: (answers: any) => !!answers.fallbackProvider,
+      },
+      {
+        type: 'password',
+        name: 'fallbackApiKey',
+        message: 'Fallback API key 1 (leave empty for Ollama/no-auth):',
+        default: '',
+        when: (answers: any) => !!answers.fallbackProvider && answers.fallbackProvider !== 'ollama',
+      },
+    ]);
+
+    fallbackProvider = sanitizeEnvValue(fallbackAnswers.fallbackProvider || '');
+    fallbackModel    = sanitizeEnvValue(fallbackAnswers.fallbackModel    || '');
+    fallbackApiKey   = sanitizeEnvValue(fallbackAnswers.fallbackApiKey   || '');
+
+    if (fallbackProvider) {
+      console.log(chalk.green(`  ✅ Fallback configured: ${fallbackProvider} / ${fallbackModel || getDefaultModel(fallbackProvider)}`));
+    }
+  }
+
   // ── STEP 5: Platform Credentials ───────────────────────
   console.log(chalk.bold.cyan('\n🔑 STEP 5: Platform Credentials\n'));
 
@@ -519,14 +627,109 @@ async function runWizard(): Promise<void> {
   if (agentAnswers.agentName) agentAnswers.agentName = sanitizeEnvValue(agentAnswers.agentName);
   if (agentAnswers.serpApiKey) agentAnswers.serpApiKey = sanitizeEnvValue(agentAnswers.serpApiKey);
 
-  // ── STEP 7: Final Summary ───────────────────────────────
+  // ── STEP 7 prep: Build enabled tools list ──────────────
   const enabledTools = [
     'shell_execute', 'file_read', 'file_write', 'file_list',
-    'http_request', 'package_manager', 'service_manager', 'cron_manager',
+    'http_request', 'cron_manager',
     'process_manager', 'system_info', 'memory_read', 'memory_write', 'ai_query',
     ...optionalTools,
   ];
-  const disabledTools = ['web_search', 'code_executor'].filter((t) => !optionalTools.includes(t));
+
+  // Add platform-specific tools (disabled on Termux)
+  if (!runningOnTermux) {
+    enabledTools.push('package_manager', 'service_manager');
+  }
+
+  // ── STEP 6b: Android/Termux Configuration ──────────────
+  let termuxApiInstalled = false;
+  let runTermuxBootSetup = false;
+
+  if (runningOnTermux) {
+    console.log(chalk.bold.cyan('\n📱 Android/Termux Configuration\n'));
+    console.log(chalk.gray('Configure Android-specific features for your device.\n'));
+
+    // Auto-detect su availability for root default
+    let suAvailable = false;
+    try {
+      execSync('which su', { stdio: 'ignore' });
+      suAvailable = true;
+    } catch {
+      // su not available
+    }
+
+    const termuxAnswers = await inquirer.prompt<{
+      installTermuxApi: boolean;
+      enableRootShell: boolean;
+      setupTermuxBoot: boolean;
+      enableAndroidInfo: boolean;
+    }>([
+      {
+        type: 'confirm',
+        name: 'installTermuxApi',
+        message: 'Install termux-api package for Android device control?',
+        default: true,
+      },
+      {
+        type: 'confirm',
+        name: 'enableRootShell',
+        message: `Enable root shell tool? (requires rooted device)${suAvailable ? chalk.green(' [su detected]') : chalk.gray(' [su not found]')}`,
+        default: suAvailable,
+      },
+      {
+        type: 'confirm',
+        name: 'setupTermuxBoot',
+        message: 'Set up Termux:Boot for auto-start on device reboot?',
+        default: true,
+      },
+      {
+        type: 'confirm',
+        name: 'enableAndroidInfo',
+        message: 'Enable Android device info tool?',
+        default: true,
+      },
+    ]);
+
+    // Install termux-api if requested
+    if (termuxAnswers.installTermuxApi) {
+      console.log(chalk.gray('\n  Installing termux-api package...'));
+      try {
+        execSync('pkg install -y termux-api', { stdio: 'inherit' });
+        termuxApiInstalled = true;
+        console.log(chalk.green('  ✅ termux-api installed'));
+      } catch (err: any) {
+        console.log(chalk.yellow(`  ⚠️  termux-api install failed: ${err.message}`));
+      }
+    }
+
+    // Add root_shell tool if enabled
+    if (termuxAnswers.enableRootShell) {
+      if (!enabledTools.includes('root_shell')) {
+        enabledTools.push('root_shell');
+      }
+      console.log(chalk.green('  ✅ root_shell tool enabled'));
+    }
+
+    // Add android_info tool if enabled
+    if (termuxAnswers.enableAndroidInfo) {
+      if (!enabledTools.includes('android_info')) {
+        enabledTools.push('android_info');
+      }
+      console.log(chalk.green('  ✅ android_info tool enabled'));
+    }
+
+    // Schedule Termux:Boot setup for after wizard completes
+    runTermuxBootSetup = termuxAnswers.setupTermuxBoot;
+  }
+
+  // ── STEP 7: Final Summary ───────────────────────────────
+  const disabledTools = ['web_search', 'code_executor', 'browser_automate'].filter(
+    (t) => !optionalTools.includes(t)
+  );
+  
+  // Mark Termux-incompatible tools as disabled
+  if (runningOnTermux) {
+    disabledTools.push('package_manager', 'service_manager');
+  }
   const estimatedRam = calcRam(platforms, whatsappDriver, optionalTools);
   const estimatedStorage = calcStorage(platforms, whatsappDriver);
 
@@ -579,10 +782,13 @@ async function runWizard(): Promise<void> {
     ...agentAnswers,
     aiProvider,
     aiModel,
+    fallbackProvider,
+    fallbackModel,
+    fallbackApiKey,
   };
 
-  // Write .env
-  const envContent = buildEnvContent(allAnswers, platforms);
+  // Write .env (with Termux-specific config if applicable)
+  const envContent = buildEnvContent(allAnswers, platforms, termuxConfig);
   fs.writeFileSync(ENV_PATH, envContent);
   console.log(chalk.green('\n✅ .env written'));
 
@@ -607,21 +813,43 @@ async function runWizard(): Promise<void> {
   generateSoul(agentAnswers.agentName || 'SuperClaw');
   generateMemory();
 
+  // Run Termux:Boot setup if requested
+  if (runningOnTermux && runTermuxBootSetup) {
+    console.log(chalk.gray('\n  Setting up Termux:Boot auto-start...'));
+    try {
+      execSync('bash termux-boot-setup.sh', { stdio: 'inherit' });
+      console.log(chalk.green('✅ Termux:Boot configured'));
+    } catch (err: any) {
+      console.log(chalk.yellow(`⚠️  Termux:Boot setup failed: ${err.message}`));
+      console.log(chalk.gray('  Run manually: bash termux-boot-setup.sh'));
+    }
+  }
+
   // Final instructions
   console.log(chalk.cyan('\n╔══════════════════════════════════════════╗'));
   console.log(chalk.cyan('║           Setup Complete! 🎉             ║'));
   console.log(chalk.cyan('╚══════════════════════════════════════════╝\n'));
   console.log(chalk.white('Next steps:'));
-  console.log(chalk.gray('  1. Install dependencies:  ') + chalk.yellow('pnpm install'));
-  console.log(chalk.gray('  2. Build TypeScript:      ') + chalk.yellow('pnpm build'));
-  console.log(chalk.gray('  3. Start with PM2:        ') + chalk.yellow('pm2 start ecosystem.config.js'));
-  console.log(chalk.gray('  4. Or run directly:       ') + chalk.yellow('pnpm start'));
+  if (runningOnTermux) {
+    console.log(chalk.gray('  1. Install dependencies:  ') + chalk.yellow('pnpm install --no-optional'));
+    console.log(chalk.gray('  2. Install Playwright:    ') + chalk.yellow('pnpm add playwright-core'));
+    console.log(chalk.gray('  3. Start directly:        ') + chalk.yellow('pnpm start'));
+  } else {
+    console.log(chalk.gray('  1. Install dependencies:  ') + chalk.yellow('pnpm install'));
+    console.log(chalk.gray('  2. Build TypeScript:      ') + chalk.yellow('pnpm build'));
+    console.log(chalk.gray('  3. Start with PM2:        ') + chalk.yellow('pm2 start ecosystem.config.js'));
+    console.log(chalk.gray('  4. Or run directly:       ') + chalk.yellow('pnpm start'));
+  }
   if (platforms.includes('whatsapp')) {
     console.log(chalk.gray('\n  On first WhatsApp run, scan the QR code in the terminal.\n'));
   }
 }
 
-function buildEnvContent(answers: any, platforms: string[]): string {
+function buildEnvContent(
+  answers: any,
+  platforms: string[],
+  termuxConfig?: { chromiumPath?: string }
+): string {
   const lines = [
     '# SuperClaw Configuration',
     `# Generated: ${new Date().toISOString()}`,
@@ -662,11 +890,35 @@ function buildEnvContent(answers: any, platforms: string[]): string {
     '# Optional',
     `SERPAPI_KEY=${sanitizeEnvValue(answers.serpApiKey || '')}`,
     '',
+  ];
+
+  // Add Termux-specific Chromium configuration
+  if (termuxConfig?.chromiumPath) {
+    lines.push(
+      '# Termux Browser Automation (auto-detected)',
+      `CHROMIUM_PATH=${termuxConfig.chromiumPath}`,
+      'PLAYWRIGHT_BROWSERS_PATH=0',
+      ''
+    );
+  }
+
+  // Add fallback AI configuration
+  lines.push(
+    '# AI Failover',
+    `FALLBACK_AI_PROVIDER=${sanitizeEnvValue(answers.fallbackProvider || '')}`,
+    `FALLBACK_AI_MODEL=${sanitizeEnvValue(answers.fallbackModel || '')}`,
+    'AI_MAX_RETRIES=3',
+    'AI_RETRY_DELAY_MS=1000',
+    ''
+  );
+
+  lines.push(
     '# Rate Limiting',
     'MAX_MESSAGES_PER_MINUTE=30',
     'MAX_AI_CALLS_PER_MINUTE=10',
-    'MAX_CONCURRENT_TOOLS=5',
-  ];
+    'MAX_CONCURRENT_TOOLS=5'
+  );
+
   return lines.join('\n') + '\n';
 }
 
@@ -708,6 +960,7 @@ function generateSoul(agentName: string): void {
     'ai_query — Ask AI for instructions',
     'web_search — Search the web',
     'code_executor — Execute Python/Bash/Node.js code',
+    'browser_automate — Browser automation (screenshots, scraping, forms)',
   ];
 
   const content = `# ${agentName} — Soul & Identity

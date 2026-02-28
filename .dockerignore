@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.git/
+.env
+*.log
+logs/
+data/*.db
+whatsapp-session/
+whatsapp-session-baileys/
+.pnpmfile.cjs

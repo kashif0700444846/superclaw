@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  superclaw:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: superclaw
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Persist database
+      - ./data:/app/data
+      # Persist logs
+      - ./logs:/app/logs
+      # Persist memory files
+      - ./memory:/app/memory
+      # Persist WhatsApp session (Baileys)
+      - ./whatsapp-session-baileys:/app/whatsapp-session-baileys
+      # Persist WhatsApp session (Puppeteer)
+      - ./whatsapp-session:/app/whatsapp-session
+      # Mount config
+      - ./superclaw.config.json:/app/superclaw.config.json:ro
+    environment:
+      - NODE_ENV=production
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional: Run doctor health check
+  superclaw-doctor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    container_name: superclaw-doctor
+    profiles:
+      - doctor
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./memory:/app/memory
+      - ./superclaw.config.json:/app/superclaw.config.json:ro
+    command: ["node", "dist/doctor.js"]

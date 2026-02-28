@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { execSync } from 'child_process';
 import { SuperclawConfig } from './types/SuperclawConfig';
 import { logger } from './logger';
 
@@ -39,7 +40,55 @@ function loadSuperclawConfig(): SuperclawConfig {
   }
 }
 
+function detectAndroidSupport(config: SuperclawConfig): void {
+  const isTermux =
+    !!process.env.TERMUX_VERSION || fs.existsSync('/data/data/com.termux');
+
+  if (!isTermux) return;
+
+  logger.info('Termux environment detected — probing Android capabilities');
+
+  // Check termux-api availability
+  let termuxApiAvailable = false;
+  try {
+    execSync('which termux-api', { stdio: 'ignore' });
+    termuxApiAvailable = true;
+  } catch {
+    // termux-api not installed
+  }
+
+  // Check root availability
+  let rootAvailable = false;
+  try {
+    execSync('which su', { stdio: 'ignore' });
+    rootAvailable = true;
+  } catch {
+    // su not available
+  }
+
+  // Check termux-boot availability
+  let termuxBootAvailable = false;
+  try {
+    execSync('which termux-boot', { stdio: 'ignore' });
+    termuxBootAvailable = true;
+  } catch {
+    // termux-boot not installed
+  }
+
+  config.androidSupport = {
+    termuxApiAvailable,
+    rootAvailable,
+    termuxBootAvailable,
+  };
+
+  logger.info(
+    `Android support detected — termux-api: ${termuxApiAvailable}, ` +
+    `root: ${rootAvailable}, termux-boot: ${termuxBootAvailable}`
+  );
+}
+
 export const superclawConfig = loadSuperclawConfig();
+detectAndroidSupport(superclawConfig);
 
 export function isPlatformEnabled(platform: 'telegram' | 'whatsapp'): boolean {
   return superclawConfig.platforms.includes(platform);

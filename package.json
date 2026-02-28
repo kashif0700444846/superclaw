@@ -13,7 +13,10 @@
     "setup": "tsx src/setup/wizard.ts",
     "lint": "tsc --noEmit",
     "install:lite": "pnpm install",
-    "install:full": "pnpm install"
+    "install:full": "pnpm install",
+    "setup:termux": "bash termux-setup.sh",
+    "doctor": "npx tsx src/doctor.ts",
+    "doctor:build": "node dist/doctor.js"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

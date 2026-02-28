@@ -8,6 +8,7 @@ import { conversationDB } from './memory/ConversationDB';
 import { toolRegistry } from './brain/ToolRegistry';
 import { superclawConfig, isPlatformEnabled, getWhatsAppDriver } from './superclawConfig';
 import { NormalizedMessage } from './gateway/types';
+import { mcpManager } from './mcp/McpManager';
 
 async function main(): Promise<void> {
   logger.info(`Starting ${config.agentName}...`);
@@ -28,7 +29,16 @@ async function main(): Promise<void> {
     logger.info('SOUL.md generated');
   }
 
-  // Step 2: Wire Brain to Gateway
+  // Step 2: Start MCP servers and register their tools
+  try {
+    await mcpManager.startAll();
+    toolRegistry.registerMcpTools();
+    logger.info('MCP servers initialized');
+  } catch (e: any) {
+    logger.warn(`MCP initialization error: ${e.message}`);
+  }
+
+  // Step 3: Wire Brain to Gateway
   gateway.setMessageHandler(async (message: NormalizedMessage) => {
     return brain.process(message);
   });
@@ -37,7 +47,7 @@ async function main(): Promise<void> {
 
   const startupErrors: string[] = [];
 
-  // Step 3a: Start Telegram (if enabled)
+  // Step 4a: Start Telegram (if enabled)
   if (isPlatformEnabled('telegram')) {
     try {
       const { telegramPlatform } = await import('./platforms/TelegramPlatform');
@@ -51,7 +61,7 @@ async function main(): Promise<void> {
     logger.info('Telegram platform disabled by config');
   }
 
-  // Step 3b: Start WhatsApp (if enabled)
+  // Step 4b: Start WhatsApp (if enabled)
   if (isPlatformEnabled('whatsapp')) {
     const driver = getWhatsAppDriver();
     logger.info(`Starting WhatsApp with driver: ${driver}`);
@@ -84,7 +94,7 @@ async function main(): Promise<void> {
     logger.info(`${config.agentName} fully started and ready`);
   }
 
-  // Step 4: Graceful shutdown
+  // Step 5: Graceful shutdown
   const shutdown = async (signal: string): Promise<void> => {
     logger.info(`Received ${signal}, shutting down gracefully...`);
 

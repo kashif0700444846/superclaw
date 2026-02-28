@@ -4,6 +4,7 @@
 // (spawn_agent, check_agent, list_agents, kill_agent) to prevent
 // recursive sub-agent spawning.
 
+import fs from 'fs';
 import { Tool } from '../gateway/types';
 import { logger } from '../logger';
 
@@ -21,6 +22,12 @@ import { systemInfoTool } from '../tools/SystemInfoTool';
 import { memoryReadTool } from '../tools/MemoryReadTool';
 import { memoryWriteTool } from '../tools/MemoryWriteTool';
 import { aiQueryTool } from '../tools/AiQueryTool';
+
+// Android / Termux tools
+import { termuxApiTool } from '../tools/TermuxApiTool';
+import { rootShellTool } from '../tools/RootShellTool';
+import { androidInfoTool } from '../tools/AndroidInfoTool';
+import { daemonManagerTool } from '../tools/DaemonManagerTool';
 
 // Agent management tool names — explicitly excluded from sub-agents
 const AGENT_TOOL_NAMES = new Set([
@@ -52,6 +59,8 @@ export class SubAgentToolRegistry {
       memoryReadTool,
       memoryWriteTool,
       aiQueryTool,
+      // Daemon / service management
+      daemonManagerTool,
     ];
 
     for (const tool of coreTools) {
@@ -84,6 +93,38 @@ export class SubAgentToolRegistry {
     } catch {
       // code_executor not available — skip silently
     }
+
+    // Optional: browser_automate
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { browserAutomationTool } = require('../tools/BrowserAutomationTool');
+      if (!AGENT_TOOL_NAMES.has(browserAutomationTool.name)) {
+        this.tools.set(browserAutomationTool.name, browserAutomationTool);
+        logger.debug('SubAgentToolRegistry: registered browser_automate');
+      }
+    } catch {
+      // browser_automate not available — skip silently
+    }
+
+    // Android tools — conditionally registered based on environment
+    const isTermux =
+      !!process.env.TERMUX_VERSION || fs.existsSync('/data/data/com.termux');
+
+    // termux_api — only in Termux environments
+    if (isTermux) {
+      this.tools.set(termuxApiTool.name, termuxApiTool);
+      logger.debug('SubAgentToolRegistry: registered termux_api');
+    } else {
+      logger.debug('SubAgentToolRegistry: termux_api skipped — not a Termux environment');
+    }
+
+    // root_shell — always register (works on Android root and Linux sudo)
+    this.tools.set(rootShellTool.name, rootShellTool);
+    logger.debug('SubAgentToolRegistry: registered root_shell');
+
+    // android_info — always register (gracefully handles non-Android environments)
+    this.tools.set(androidInfoTool.name, androidInfoTool);
+    logger.debug('SubAgentToolRegistry: registered android_info');
 
     logger.info(`SubAgentToolRegistry: ${this.tools.size} tools registered`);
   }

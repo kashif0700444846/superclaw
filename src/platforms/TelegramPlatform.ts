@@ -119,6 +119,12 @@ export class TelegramPlatform {
   private thinkingMessageIds: Map<string, number> = new Map();
 
   /**
+   * Maps chatId → active typing interval handle.
+   * Cleared when a response is sent (in sendResponse) or on error.
+   */
+  private typingIntervals: Map<string, NodeJS.Timeout> = new Map();
+
+  /**
    * Tracks per-user recovery state:
    *   'awaiting_base_url' — next text message is a new CUSTOM_AI_BASE_URL
    *   'awaiting_api_key'  — next text message is a new API key
@@ -252,7 +258,9 @@ export class TelegramPlatform {
       // 3. Small delay to ensure Telegram delivers the placeholder before processing starts
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // 4. Keep typing indicator alive — fire immediately then every 4 seconds
+      // 4. Keep typing indicator alive — fire immediately then every 4 seconds.
+      //    Store in class-level Map so sendResponse() can clear it as soon as
+      //    the first response chunk is ready (before gateway.receiveMessage resolves).
       try {
         await this.bot.api.sendChatAction(ctx.chat.id, 'typing');
       } catch {
@@ -265,12 +273,13 @@ export class TelegramPlatform {
           // Ignore — bot may have been stopped
         }
       }, 4000);
+      this.typingIntervals.set(chatId, typingInterval);
 
       try {
         // 5. Process message — response will arrive via sendResponse() below
         await gateway.receiveMessage(message);
       } catch (err: unknown) {
-        clearInterval(typingInterval);
+        this.clearTypingInterval(chatId);
         logger.error('Brain processing error', { error: err, userId, platform: 'telegram' });
 
         const errorMsg = err instanceof Error ? err.message : String(err);
@@ -301,7 +310,7 @@ export class TelegramPlatform {
         return;
       } finally {
         // Always clear the typing interval regardless of success/error
-        clearInterval(typingInterval);
+        this.clearTypingInterval(chatId);
 
         // If the placeholder was never consumed (e.g. gateway returned nothing or
         // an error path skipped sendResponse), clean it up now.
@@ -406,6 +415,9 @@ export class TelegramPlatform {
   private async sendResponse(response: NormalizedResponse): Promise<void> {
     const chatId = response.chatId;
 
+    // Stop the typing indicator as soon as we have a response ready to send
+    this.clearTypingInterval(chatId);
+
     try {
       // If this is a confirmation request, send with inline keyboard (never edit placeholder)
       if (response.confirmationId) {
@@ -449,6 +461,18 @@ export class TelegramPlatform {
       }
     } catch (error: any) {
       logger.error('Failed to send Telegram message', { error: error.message });
+    }
+  }
+
+  /**
+   * Clear the typing interval for a given chatId (if any).
+   * Safe to call multiple times — no-op if no interval is active.
+   */
+  private clearTypingInterval(chatId: string): void {
+    const interval = this.typingIntervals.get(chatId);
+    if (interval !== undefined) {
+      clearInterval(interval);
+      this.typingIntervals.delete(chatId);
     }
   }
 

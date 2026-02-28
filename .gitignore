@@ -2,6 +2,7 @@
 .env
 *.env
 superclaw.config.json
+mcp-servers.json
 
 # Node modules
 node_modules/
@@ -18,6 +19,9 @@ memory/logs/
 # Database
 data/*.db
 data/*.sqlite
+
+# Scratch/temp files from other tools
+data/openclaw-*
 
 # WhatsApp session (contains auth keys)
 whatsapp-session/

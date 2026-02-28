@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
 import path from 'path';
-import { AgentConfig } from './gateway/types';
+import { AgentConfig, FallbackModel } from './gateway/types';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
@@ -22,6 +22,40 @@ function validateProvider(provider: string): 'openai' | 'anthropic' | 'groq' | '
     throw new Error(`Invalid AI_PROVIDER: ${provider}. Must be one of: ${valid.join(', ')}`);
   }
   return provider as 'openai' | 'anthropic' | 'groq' | 'ollama' | 'custom';
+}
+
+/**
+ * Build the fallback model list from FALLBACK_AI_PROVIDER and FALLBACK_AI_MODEL
+ * env vars (comma-separated, positionally matched).
+ *
+ * Example:
+ *   FALLBACK_AI_PROVIDER=groq,ollama
+ *   FALLBACK_AI_MODEL=llama-3.1-70b-versatile,llama3
+ */
+function buildFallbackModels(): FallbackModel[] {
+  const providers = optionalEnv('FALLBACK_AI_PROVIDER');
+  const models = optionalEnv('FALLBACK_AI_MODEL');
+
+  if (!providers || !models) return [];
+
+  const providerList = providers.split(',').map((s) => s.trim());
+  const modelList = models.split(',').map((s) => s.trim());
+
+  const fallbacks: FallbackModel[] = [];
+  const count = Math.min(providerList.length, modelList.length);
+
+  for (let i = 0; i < count; i++) {
+    const p = providerList[i];
+    const valid = ['openai', 'anthropic', 'groq', 'ollama', 'custom'];
+    if (!valid.includes(p)) continue; // skip invalid providers silently
+
+    fallbacks.push({
+      provider: p as FallbackModel['provider'],
+      model: modelList[i],
+    });
+  }
+
+  return fallbacks;
 }
 
 const provider = validateProvider(optionalEnv('AI_PROVIDER', 'openai'));
@@ -49,6 +83,10 @@ export const config: AgentConfig = {
   maxAiCallsPerMinute: parseInt(optionalEnv('MAX_AI_CALLS_PER_MINUTE', '10')),
   maxConcurrentTools: parseInt(optionalEnv('MAX_CONCURRENT_TOOLS', '5')),
   maxConcurrentAgents: parseInt(optionalEnv('MAX_CONCURRENT_AGENTS', '5')),
+  // Failover / retry configuration
+  fallbackModels: buildFallbackModels(),
+  aiMaxRetries: parseInt(optionalEnv('AI_MAX_RETRIES', '3')),
+  aiRetryDelayMs: parseInt(optionalEnv('AI_RETRY_DELAY_MS', '1000')),
 };
 
 export default config;
