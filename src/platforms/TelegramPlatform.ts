@@ -52,7 +52,7 @@ export class TelegramPlatform {
 
       logger.debug(`Telegram message from ${ctx.from!.id}: ${ctx.message.text.substring(0, 80)}`);
 
-      // 1. Send typing action immediately
+      // 1. Send typing action immediately (await ensures it's dispatched before processing)
       try {
         await this.bot.api.sendChatAction(ctx.chat.id, 'typing');
       } catch {
@@ -69,7 +69,15 @@ export class TelegramPlatform {
         logger.warn('Failed to send thinking placeholder', { error: err.message });
       }
 
-      // 3. Keep typing indicator alive every 4 seconds while the brain works
+      // 3. Small delay to ensure Telegram delivers the placeholder before processing starts
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // 4. Keep typing indicator alive — fire immediately then every 4 seconds
+      try {
+        await this.bot.api.sendChatAction(ctx.chat.id, 'typing');
+      } catch {
+        // Non-fatal — ignore
+      }
       const typingInterval = setInterval(async () => {
         try {
           await this.bot.api.sendChatAction(ctx.chat.id, 'typing');
@@ -79,10 +87,10 @@ export class TelegramPlatform {
       }, 4000);
 
       try {
-        // 4. Process message — response will arrive via sendResponse() below
+        // 5. Process message — response will arrive via sendResponse() below
         await gateway.receiveMessage(message);
       } finally {
-        // 5. Always clear the typing interval regardless of success/error
+        // 6. Always clear the typing interval regardless of success/error
         clearInterval(typingInterval);
 
         // If the placeholder was never consumed (e.g. gateway returned nothing or
