@@ -2,8 +2,11 @@ import inquirer from 'inquirer';
 import chalk from 'chalk';
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import { SuperclawConfig } from '../types/SuperclawConfig';
+
+// Project root: compiled to dist/setup/wizard.js, so ../../ is the project root
+const projectDir = path.join(__dirname, '../..');
 
 function sanitizeEnvValue(value: string): string {
   if (!value) return '';
@@ -843,20 +846,100 @@ async function runWizard(): Promise<void> {
   console.log(chalk.cyan('\n╔══════════════════════════════════════════╗'));
   console.log(chalk.cyan('║           Setup Complete! 🎉             ║'));
   console.log(chalk.cyan('╚══════════════════════════════════════════╝\n'));
-  console.log(chalk.white('Next steps:'));
-  if (runningOnTermux) {
-    console.log(chalk.gray('  1. Install dependencies:  ') + chalk.yellow('pnpm install --no-optional'));
-    console.log(chalk.gray('  2. Install Playwright:    ') + chalk.yellow('pnpm add playwright-core'));
-    console.log(chalk.gray('  3. Start directly:        ') + chalk.yellow('pnpm start'));
-  } else {
-    console.log(chalk.gray('  1. Install dependencies:  ') + chalk.yellow('pnpm install'));
-    console.log(chalk.gray('  2. Build TypeScript:      ') + chalk.yellow('pnpm build'));
-    console.log(chalk.gray('  3. Start with PM2:        ') + chalk.yellow('pm2 start ecosystem.config.js'));
-    console.log(chalk.gray('  4. Or run directly:       ') + chalk.yellow('pnpm start'));
-  }
+
   if (platforms.includes('whatsapp')) {
-    console.log(chalk.gray('\n  On first WhatsApp run, scan the QR code in the terminal.\n'));
+    console.log(chalk.gray('  ℹ️  On first WhatsApp run, scan the QR code in the terminal.\n'));
   }
+
+  // ── Interactive post-setup launch ──────────────────────
+  const { startNow } = await inquirer.prompt<{ startNow: boolean }>([{
+    type: 'confirm',
+    name: 'startNow',
+    message: 'Would you like to start SuperClaw now?',
+    default: true,
+  }]);
+
+  if (startNow) {
+    // Check if PM2 is available (skip on Termux — PM2 is rarely used there)
+    let pm2Available = false;
+    if (!runningOnTermux) {
+      try {
+        execSync('pm2 --version', { stdio: 'pipe' });
+        pm2Available = true;
+      } catch { /* PM2 not installed */ }
+    }
+
+    let startMethod: string;
+
+    if (pm2Available) {
+      const { method } = await inquirer.prompt<{ method: string }>([{
+        type: 'list',
+        name: 'method',
+        message: 'How would you like to start SuperClaw?',
+        choices: [
+          { name: '🚀 PM2 (recommended for production — runs in background)', value: 'pm2' },
+          { name: '▶️  Direct (runs in foreground — good for testing)', value: 'direct' },
+          { name: '❌ Skip — I\'ll start it manually', value: 'skip' },
+        ],
+      }]);
+      startMethod = method;
+    } else {
+      const { method } = await inquirer.prompt<{ method: string }>([{
+        type: 'list',
+        name: 'method',
+        message: 'How would you like to start SuperClaw?',
+        choices: [
+          { name: '▶️  Direct (runs in foreground)', value: 'direct' },
+          { name: '❌ Skip — I\'ll start it manually', value: 'skip' },
+        ],
+      }]);
+      startMethod = method;
+    }
+
+    if (startMethod === 'pm2') {
+      console.log('\n🚀 Starting SuperClaw with PM2...');
+      try {
+        execSync('pm2 start ecosystem.config.js', { stdio: 'inherit', cwd: projectDir });
+        execSync('pm2 save', { stdio: 'inherit', cwd: projectDir });
+        console.log('\n✅ SuperClaw is running! Use these commands:');
+        console.log('   pm2 logs superclaw    — view logs');
+        console.log('   pm2 restart superclaw — restart');
+        console.log('   pm2 stop superclaw    — stop');
+        console.log('   superclaw --help      — CLI help');
+      } catch (e: any) {
+        console.error('Failed to start with PM2:', e.message);
+        console.log('Try manually: pm2 start ecosystem.config.js');
+      }
+    } else if (startMethod === 'direct') {
+      console.log('\n▶️  Starting SuperClaw directly...');
+      console.log('Press Ctrl+C to stop.\n');
+      const child = spawn('node', ['dist/index.js'], { stdio: 'inherit', cwd: projectDir });
+      child.on('exit', (code: number | null) => process.exit(code ?? 0));
+      return; // Don't print anything after this — child owns the terminal
+    } else {
+      console.log('\n📋 To start SuperClaw manually:');
+      if (runningOnTermux) {
+        console.log('   Direct: pnpm start');
+      } else {
+        console.log('   PM2:    pm2 start ecosystem.config.js');
+        console.log('   Direct: node dist/index.js');
+        console.log('   CLI:    superclaw --help');
+      }
+    }
+  } else {
+    console.log('\n📋 To start SuperClaw later:');
+    if (runningOnTermux) {
+      console.log('   Direct: pnpm start');
+    } else {
+      console.log('   PM2:    pm2 start ecosystem.config.js');
+      console.log('   Direct: node dist/index.js');
+      console.log('   CLI:    superclaw --help');
+    }
+  }
+
+  // ── Admin tip ───────────────────────────────────────────
+  console.log(chalk.cyan('\n💡 Tip: To add more admin users later, run: ') + chalk.yellow('superclaw admin add'));
+  console.log(chalk.gray('        Or get a user\'s Telegram ID from @userinfobot'));
 }
 
 function buildEnvContent(

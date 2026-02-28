@@ -44,6 +44,10 @@ Commands:
   env             Edit .env configuration
   update          Update to latest version
   doctor          Run health check diagnostics
+  admin           Manage admin Telegram IDs (add/remove)
+  admin list      List current admin IDs
+  admin add       Add a new admin ID
+  admin remove    Remove an admin ID
   version         Show version
   uninstall       Remove SuperClaw installation
   --help, -h      Show this help
@@ -196,6 +200,119 @@ async function runChat(): Promise<void> {
   });
 }
 
+// ── Admin management ──────────────────────────────────────────────────────────
+
+async function manageAdmins(subcommand?: string): Promise<void> {
+  const envPath = path.join(PROJECT_DIR, '.env');
+
+  if (!fs.existsSync(envPath)) {
+    console.error('❌ .env file not found. Run: superclaw setup');
+    process.exit(1);
+  }
+
+  // Read current .env
+  let envContent = fs.readFileSync(envPath, 'utf8');
+
+  // Parse current admin IDs
+  const match = envContent.match(/^ADMIN_TELEGRAM_ID=(.*)$/m);
+  const currentIds = match
+    ? match[1].replace(/\r/g, '').split(',').map((s: string) => s.trim()).filter(Boolean)
+    : [];
+
+  function saveAdminIds(ids: string[]): void {
+    const newLine = `ADMIN_TELEGRAM_ID=${ids.join(',')}`;
+    if (match) {
+      envContent = envContent.replace(/^ADMIN_TELEGRAM_ID=.*$/m, newLine);
+    } else {
+      envContent += `\n${newLine}`;
+    }
+    fs.writeFileSync(envPath, envContent, 'utf8');
+    console.log(`✅ Admin IDs updated: ${ids.join(', ')}`);
+    console.log('Restart SuperClaw to apply: superclaw restart');
+  }
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const question = (q: string): Promise<string> =>
+    new Promise((resolve) => rl.question(q, resolve));
+
+  if (subcommand === 'list' || !subcommand) {
+    console.log('\n👥 Current admin Telegram IDs:');
+    if (currentIds.length === 0) {
+      console.log('  (none configured)');
+    } else {
+      currentIds.forEach((id: string, i: number) => console.log(`  ${i + 1}. ${id}`));
+    }
+
+    if (!subcommand) {
+      // Interactive menu
+      console.log('\nOptions:');
+      console.log('  1. Add admin');
+      console.log('  2. Remove admin');
+      console.log('  3. Exit');
+      const choice = await question('\nChoice (1-3): ');
+
+      if (choice.trim() === '1') {
+        const newId = await question('Enter Telegram user ID to add: ');
+        const trimmed = newId.trim().replace(/\r/g, '');
+        if (!/^\d+$/.test(trimmed)) {
+          console.error('❌ Invalid ID — must be a number');
+        } else if (currentIds.includes(trimmed)) {
+          console.log('ℹ️  This ID is already an admin');
+        } else {
+          saveAdminIds([...currentIds, trimmed]);
+        }
+      } else if (choice.trim() === '2') {
+        if (currentIds.length === 0) {
+          console.log('No admins to remove.');
+        } else {
+          currentIds.forEach((id: string, i: number) => console.log(`  ${i + 1}. ${id}`));
+          const idx = await question('Enter number to remove: ');
+          const index = parseInt(idx, 10) - 1;
+          if (index >= 0 && index < currentIds.length) {
+            const removed = currentIds.splice(index, 1)[0];
+            saveAdminIds(currentIds);
+            console.log(`Removed admin: ${removed}`);
+          } else {
+            console.error('Invalid selection');
+          }
+        }
+      }
+    }
+  } else if (subcommand === 'add') {
+    const newId = await question('Enter Telegram user ID to add as admin: ');
+    const trimmed = newId.trim().replace(/\r/g, '');
+    if (!/^\d+$/.test(trimmed)) {
+      console.error('❌ Invalid ID — must be a number (get it from @userinfobot on Telegram)');
+    } else if (currentIds.includes(trimmed)) {
+      console.log('ℹ️  This ID is already an admin');
+    } else {
+      saveAdminIds([...currentIds, trimmed]);
+    }
+  } else if (subcommand === 'remove') {
+    if (currentIds.length === 0) {
+      console.log('No admins configured.');
+    } else {
+      console.log('\nCurrent admins:');
+      currentIds.forEach((id: string, i: number) => console.log(`  ${i + 1}. ${id}`));
+      const idx = await question('Enter number to remove: ');
+      const index = parseInt(idx, 10) - 1;
+      if (index >= 0 && index < currentIds.length) {
+        const removed = currentIds.splice(index, 1)[0];
+        saveAdminIds(currentIds);
+        console.log(`✅ Removed admin: ${removed}`);
+      } else {
+        console.error('❌ Invalid selection');
+      }
+    }
+  } else {
+    console.error(`Unknown admin subcommand: ${subcommand}`);
+    console.log('Usage: superclaw admin [list|add|remove]');
+    process.exit(1);
+  }
+
+  rl.close();
+}
+
 // ── Utility helpers ───────────────────────────────────────────────────────────
 
 function runCommand(cmd: string, args: string[] = []): void {
@@ -310,6 +427,10 @@ async function main(): Promise<void> {
 
     case 'doctor':
       runCommand('node', [path.join(PROJECT_DIR, 'dist/doctor.js')]);
+      break;
+
+    case 'admin':
+      await manageAdmins(args[1]);
       break;
 
     case 'uninstall': {
