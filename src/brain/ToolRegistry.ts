@@ -17,6 +17,7 @@ import { processManagerTool } from '../tools/ProcessManagerTool';
 import { systemInfoTool } from '../tools/SystemInfoTool';
 import { memoryReadTool } from '../tools/MemoryReadTool';
 import { memoryWriteTool } from '../tools/MemoryWriteTool';
+import { clearHistoryTool } from '../tools/ClearHistoryTool';
 import { aiQueryTool } from '../tools/AiQueryTool';
 
 // Sub-agent management tools
@@ -49,6 +50,7 @@ export class ToolRegistry {
       systemInfoTool,
       memoryReadTool,
       memoryWriteTool,
+      clearHistoryTool,
       aiQueryTool,
       // Sub-agent management tools
       spawnAgentTool,

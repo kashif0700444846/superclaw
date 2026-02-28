@@ -3,6 +3,7 @@ import { NormalizedMessage, NormalizedResponse } from '../gateway/types';
 import { gateway } from '../gateway/Gateway';
 import { config } from '../config';
 import { logger } from '../logger';
+import { conversationDB } from '../memory/ConversationDB';
 
 export class TelegramPlatform {
   private bot: Bot;
@@ -35,6 +36,20 @@ export class TelegramPlatform {
         return;
       }
       await next();
+    });
+
+    // /clear command — clears conversation history for the current user
+    this.bot.command('clear', async (ctx) => {
+      const userId = ctx.from!.id.toString();
+      const chatId = ctx.chat.id.toString();
+      try {
+        conversationDB.clearHistory(userId, 'telegram');
+        await ctx.reply('✅ Conversation history cleared! Starting fresh. 🚀');
+        logger.info(`Telegram /clear: cleared history for user ${userId}`);
+      } catch (err: any) {
+        logger.error('Failed to clear history via /clear command', { error: err.message });
+        await ctx.reply('❌ Failed to clear history. Please try again.');
+      }
     });
 
     // Handle all text messages (including commands)
