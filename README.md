@@ -119,6 +119,11 @@ The Puppeteer-based WhatsApp option is still available if you need it, but Baile
 
 ## Changelog
 
+### v2.7.0 (2026-02-28)
+- SelfUpdateTool: shows current vs latest version on check
+- SelfUpdateTool: new `changelog` action — ask "what changed recently" to see last 5 commits
+- SelfUpdateTool: improved user-friendly response messages
+
 ### v2.6.0 (2026-02-28)
 - Fixed update.sh: git checkout pnpm-lock.yaml before pull to prevent merge conflicts
 - Added self_update tool: SuperClaw can check for updates and update itself via Telegram/WhatsApp
