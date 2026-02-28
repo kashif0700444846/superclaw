@@ -1,6 +1,6 @@
 {
   "name": "superclaw",
-  "version": "2.9.2",
+  "version": "2.9.3",
   "description": "Autonomous AI agent system — modular, memory-efficient",
   "main": "dist/index.js",
   "bin": {

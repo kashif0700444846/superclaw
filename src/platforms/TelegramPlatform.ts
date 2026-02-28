@@ -8,6 +8,12 @@ export class TelegramPlatform {
   private bot: Bot;
   private isRunning: boolean = false;
 
+  /**
+   * Maps chatId → message_id of the "⏳ Processing..." placeholder.
+   * Consumed (deleted from map) on first use so subsequent chunks are sent normally.
+   */
+  private thinkingMessageIds: Map<string, number> = new Map();
+
   constructor() {
     this.bot = new Bot(config.telegramBotToken);
     this.setupHandlers();
@@ -33,17 +39,65 @@ export class TelegramPlatform {
 
     // Handle all text messages (including commands)
     this.bot.on('message:text', async (ctx) => {
+      const chatId = ctx.chat.id.toString();
+
       const message: NormalizedMessage = {
         platform: 'telegram',
         userId: ctx.from!.id.toString(),
-        chatId: ctx.chat.id.toString(),
+        chatId,
         text: ctx.message.text,
         timestamp: new Date(ctx.message.date * 1000),
         messageId: ctx.message.message_id.toString(),
       };
 
       logger.debug(`Telegram message from ${ctx.from!.id}: ${ctx.message.text.substring(0, 80)}`);
-      await gateway.receiveMessage(message);
+
+      // 1. Send typing action immediately
+      try {
+        await this.bot.api.sendChatAction(ctx.chat.id, 'typing');
+      } catch {
+        // Non-fatal — ignore
+      }
+
+      // 2. Send "⏳ Processing..." placeholder and store its message_id
+      let thinkingMsgId: number | undefined;
+      try {
+        const thinkingMsg = await this.bot.api.sendMessage(chatId, '⏳ Processing your request...');
+        thinkingMsgId = thinkingMsg.message_id;
+        this.thinkingMessageIds.set(chatId, thinkingMsgId);
+      } catch (err: any) {
+        logger.warn('Failed to send thinking placeholder', { error: err.message });
+      }
+
+      // 3. Keep typing indicator alive every 4 seconds while the brain works
+      const typingInterval = setInterval(async () => {
+        try {
+          await this.bot.api.sendChatAction(ctx.chat.id, 'typing');
+        } catch {
+          // Ignore — bot may have been stopped
+        }
+      }, 4000);
+
+      try {
+        // 4. Process message — response will arrive via sendResponse() below
+        await gateway.receiveMessage(message);
+      } finally {
+        // 5. Always clear the typing interval regardless of success/error
+        clearInterval(typingInterval);
+
+        // If the placeholder was never consumed (e.g. gateway returned nothing or
+        // an error path skipped sendResponse), clean it up now.
+        if (this.thinkingMessageIds.has(chatId)) {
+          this.thinkingMessageIds.delete(chatId);
+          if (thinkingMsgId !== undefined) {
+            try {
+              await this.bot.api.deleteMessage(chatId, thinkingMsgId);
+            } catch {
+              // Ignore — message may already be gone
+            }
+          }
+        }
+      }
     });
 
     // Handle callback queries (Yes/No confirmation buttons)
@@ -94,8 +148,11 @@ export class TelegramPlatform {
     const chatId = response.chatId;
 
     try {
-      // If this is a confirmation request, send with inline keyboard
+      // If this is a confirmation request, send with inline keyboard (never edit placeholder)
       if (response.confirmationId) {
+        // Consume and delete the thinking placeholder if present
+        await this.consumeThinkingMessage(chatId);
+
         const keyboard = new InlineKeyboard()
           .text('✅ Yes, Execute', `confirm:YES:${response.confirmationId}`)
           .text('❌ No, Cancel', `confirm:NO:${response.confirmationId}`);
@@ -111,7 +168,29 @@ export class TelegramPlatform {
       const text = response.text || '(empty response)';
       const chunks = this.splitMessage(text, 4096);
 
-      for (const chunk of chunks) {
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+
+        // On the first chunk, try to edit the thinking placeholder
+        if (i === 0) {
+          const thinkingMsgId = this.thinkingMessageIds.get(chatId);
+          if (thinkingMsgId !== undefined) {
+            this.thinkingMessageIds.delete(chatId);
+            try {
+              await this.bot.api.editMessageText(chatId, thinkingMsgId, chunk, {
+                parse_mode: response.parseMode === 'Markdown' ? 'Markdown' : undefined,
+              });
+              continue; // Successfully edited — move to next chunk
+            } catch (editErr: any) {
+              logger.debug('Could not edit thinking placeholder, sending new message', {
+                error: editErr.message,
+              });
+              // Fall through to sendMessage below
+            }
+          }
+        }
+
+        // Send as a new message (either no placeholder, edit failed, or subsequent chunks)
         await this.bot.api.sendMessage(chatId, chunk, {
           parse_mode: response.parseMode === 'Markdown' ? 'Markdown' : undefined,
         });
@@ -120,12 +199,30 @@ export class TelegramPlatform {
       // If Markdown parsing fails, retry as plain text
       if (error.message?.includes('parse') || error.message?.includes('entities')) {
         try {
+          // Consume placeholder on retry path too
+          await this.consumeThinkingMessage(chatId);
           await this.bot.api.sendMessage(chatId, response.text);
         } catch (retryError: any) {
           logger.error('Failed to send Telegram message', { error: retryError.message });
         }
       } else {
         logger.error('Failed to send Telegram message', { error: error.message });
+      }
+    }
+  }
+
+  /**
+   * If a thinking placeholder exists for this chatId, delete it and remove from map.
+   * Used when we need to send a fresh message instead of editing.
+   */
+  private async consumeThinkingMessage(chatId: string): Promise<void> {
+    const thinkingMsgId = this.thinkingMessageIds.get(chatId);
+    if (thinkingMsgId !== undefined) {
+      this.thinkingMessageIds.delete(chatId);
+      try {
+        await this.bot.api.deleteMessage(chatId, thinkingMsgId);
+      } catch {
+        // Ignore — message may already be gone or too old
       }
     }
   }
