@@ -119,6 +119,11 @@ The Puppeteer-based WhatsApp option is still available if you need it, but Baile
 
 ## Changelog
 
+### v2.2.0 (2026-02-28)
+- Fixed custom API provider connection test (removed max_tokens limit for better compatibility)
+- Wizard now fetches available models from /v1/models and shows a selectable list
+- Added update.sh — single command to update SuperClaw on your VPS
+
 ### v2.1.0 (2026-02-27)
 - Added Custom OpenAI-compatible API provider support (OpenRouter, LM Studio, etc.)
 - Custom provider connection test during setup wizard

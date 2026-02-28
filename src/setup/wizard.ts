@@ -2,7 +2,6 @@ import inquirer from 'inquirer';
 import chalk from 'chalk';
 import fs from 'fs';
 import path from 'path';
-import OpenAI from 'openai';
 import { SuperclawConfig } from '../types/SuperclawConfig';
 
 const ENV_PATH = path.resolve(process.cwd(), '.env');
@@ -80,16 +79,32 @@ async function testCustomConnection(
   apiKey: string
 ): Promise<{ ok: boolean; error?: string }> {
   try {
-    const client = new OpenAI({ baseURL, apiKey: apiKey || 'none' });
+    const OpenAI = (await import('openai')).default;
+    const client = new OpenAI({
+      baseURL,
+      apiKey: apiKey || 'none',
+      defaultHeaders: apiKey ? undefined : {},
+    });
+    // Send minimal test — no max_tokens, no stream, just a simple message
     await client.chat.completions.create({
       model,
-      messages: [{ role: 'user', content: 'Say "ok"' }],
-      max_tokens: 5,
+      messages: [{ role: 'user', content: 'hi' }],
     });
     return { ok: true };
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: message };
+  } catch (err: any) {
+    const msg = err?.message || err?.toString() || 'Unknown error';
+    return { ok: false, error: msg };
+  }
+}
+
+async function fetchAvailableModels(baseURL: string, apiKey: string): Promise<string[]> {
+  try {
+    const OpenAI = (await import('openai')).default;
+    const client = new OpenAI({ baseURL, apiKey: apiKey || 'none' });
+    const response = await client.models.list();
+    return response.data.map((m: any) => m.id).sort();
+  } catch {
+    return [];
   }
 }
 
@@ -242,9 +257,8 @@ async function runWizard(): Promise<void> {
     console.log(chalk.bold.cyan('\n🔌 Custom Provider Setup\n'));
     console.log(chalk.gray('Enter the details for your OpenAI-compatible endpoint.\n'));
 
-    const customDetails = await inquirer.prompt<{
+    const urlAndKeyDetails = await inquirer.prompt<{
       customBaseUrl: string;
-      customModel: string;
       customApiKey: string;
     }>([
       {
@@ -255,13 +269,6 @@ async function runWizard(): Promise<void> {
         validate: (val: string) => val.startsWith('http') ? true : 'Must be a valid URL starting with http',
       },
       {
-        type: 'input',
-        name: 'customModel',
-        message: 'Model name (e.g. mistral-7b, gpt-4o, llama3):',
-        default: aiModel,
-        validate: (val: string) => val.trim().length > 0 ? true : 'Model name cannot be empty',
-      },
-      {
         type: 'password',
         name: 'customApiKey',
         message: 'API Key (leave empty for local/no-auth models):',
@@ -269,9 +276,54 @@ async function runWizard(): Promise<void> {
       },
     ]);
 
-    customAiBaseUrl = customDetails.customBaseUrl;
-    customAiModel = customDetails.customModel;
-    customAiApiKey = customDetails.customApiKey;
+    customAiBaseUrl = urlAndKeyDetails.customBaseUrl;
+    customAiApiKey = urlAndKeyDetails.customApiKey;
+
+    // Fetch available models from /v1/models
+    console.log(chalk.gray('\n  Fetching available models from endpoint...'));
+    const availableModels = await fetchAvailableModels(customAiBaseUrl, customAiApiKey);
+
+    if (availableModels.length > 0) {
+      const modelChoices = [
+        ...availableModels.map((m) => ({ name: m, value: m })),
+        { name: chalk.gray('── Enter manually ──'), value: '__manual__' },
+      ];
+      const { selectedModel } = await inquirer.prompt<{ selectedModel: string }>([
+        {
+          type: 'list',
+          name: 'selectedModel',
+          message: 'Select model:',
+          choices: modelChoices,
+          default: availableModels[0],
+        },
+      ]);
+      if (selectedModel === '__manual__') {
+        const { manualModel } = await inquirer.prompt<{ manualModel: string }>([
+          {
+            type: 'input',
+            name: 'manualModel',
+            message: 'Model name:',
+            default: aiModel,
+            validate: (val: string) => val.trim().length > 0 ? true : 'Model name cannot be empty',
+          },
+        ]);
+        customAiModel = manualModel;
+      } else {
+        customAiModel = selectedModel;
+      }
+    } else {
+      // Fallback to free-text input if fetch failed
+      const { manualModel } = await inquirer.prompt<{ manualModel: string }>([
+        {
+          type: 'input',
+          name: 'manualModel',
+          message: 'Model name (e.g. mistral-7b, gpt-4o, llama3):',
+          default: aiModel,
+          validate: (val: string) => val.trim().length > 0 ? true : 'Model name cannot be empty',
+        },
+      ]);
+      customAiModel = manualModel;
+    }
 
     // Test connection with retry loop
     let connectionOk = false;
@@ -301,9 +353,8 @@ async function runWizard(): Promise<void> {
           connectionOk = true;
         } else {
           // Re-prompt for custom details
-          const retryDetails = await inquirer.prompt<{
+          const retryUrlAndKey = await inquirer.prompt<{
             customBaseUrl: string;
-            customModel: string;
             customApiKey: string;
           }>([
             {
@@ -314,22 +365,59 @@ async function runWizard(): Promise<void> {
               validate: (val: string) => val.startsWith('http') ? true : 'Must be a valid URL starting with http',
             },
             {
-              type: 'input',
-              name: 'customModel',
-              message: 'Model name:',
-              default: customAiModel,
-              validate: (val: string) => val.trim().length > 0 ? true : 'Model name cannot be empty',
-            },
-            {
               type: 'password',
               name: 'customApiKey',
               message: 'API Key (leave empty for local/no-auth models):',
               default: '',
             },
           ]);
-          customAiBaseUrl = retryDetails.customBaseUrl;
-          customAiModel = retryDetails.customModel;
-          customAiApiKey = retryDetails.customApiKey;
+          customAiBaseUrl = retryUrlAndKey.customBaseUrl;
+          customAiApiKey = retryUrlAndKey.customApiKey;
+
+          // Re-fetch models after URL/key change
+          console.log(chalk.gray('\n  Fetching available models from endpoint...'));
+          const retryModels = await fetchAvailableModels(customAiBaseUrl, customAiApiKey);
+
+          if (retryModels.length > 0) {
+            const retryChoices = [
+              ...retryModels.map((m) => ({ name: m, value: m })),
+              { name: chalk.gray('── Enter manually ──'), value: '__manual__' },
+            ];
+            const { retrySelectedModel } = await inquirer.prompt<{ retrySelectedModel: string }>([
+              {
+                type: 'list',
+                name: 'retrySelectedModel',
+                message: 'Select model:',
+                choices: retryChoices,
+                default: retryModels[0],
+              },
+            ]);
+            if (retrySelectedModel === '__manual__') {
+              const { retryManualModel } = await inquirer.prompt<{ retryManualModel: string }>([
+                {
+                  type: 'input',
+                  name: 'retryManualModel',
+                  message: 'Model name:',
+                  default: customAiModel,
+                  validate: (val: string) => val.trim().length > 0 ? true : 'Model name cannot be empty',
+                },
+              ]);
+              customAiModel = retryManualModel;
+            } else {
+              customAiModel = retrySelectedModel;
+            }
+          } else {
+            const { retryManualModel } = await inquirer.prompt<{ retryManualModel: string }>([
+              {
+                type: 'input',
+                name: 'retryManualModel',
+                message: 'Model name:',
+                default: customAiModel,
+                validate: (val: string) => val.trim().length > 0 ? true : 'Model name cannot be empty',
+              },
+            ]);
+            customAiModel = retryManualModel;
+          }
         }
       }
     }
