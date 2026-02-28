@@ -1,194 +1,184 @@
 <?php
 // =============================================================================
-// SuperClaw PHP Setup Wizard
+// SuperClaw PHP Setup Wizard — Rewritten for reliability
 // Delete this file after setup is complete for security.
 // =============================================================================
 
-// Fix 1: Suppress PHP errors from corrupting JSON responses
+// Must be FIRST — before anything else, capture all output so stray PHP
+// warnings/notices cannot corrupt JSON responses or cause HTTP 500.
+if (ob_get_level() === 0) ob_start();
 ini_set('display_errors', 0);
 error_reporting(0);
-
 session_start();
 
-define('SETUP_PASSWORD', 'superclaw'); // Change this before deploying!
-define('PROJECT_ROOT', dirname(__DIR__));
-define('ENV_FILE', PROJECT_ROOT . '/.env');
-define('DIST_DIR', PROJECT_ROOT . '/dist');
+define('SETUP_PASSWORD', 'superclaw');
+define('PROJECT_ROOT', realpath(__DIR__ . '/..'));
+
+// PATH for shell commands — cover NVM, pnpm, and standard system paths
+$extraPath = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+$nvmPath   = '/root/.nvm/versions/node/v20.15.1/bin:/root/.nvm/versions/node/v20.18.0/bin:/root/.nvm/versions/node/v22.0.0/bin';
+$pnpmPath  = '/root/.local/share/pnpm:/usr/local/pnpm';
+putenv("PATH=$nvmPath:$pnpmPath:$extraPath:" . getenv('PATH'));
 
 // ---------------------------------------------------------------------------
-// Fix 4: Helper — find a binary by checking common paths
+// Helper: run a shell command safely
 // ---------------------------------------------------------------------------
-function findBinary(string $name): string {
-    $paths = [
-        "/usr/local/bin/{$name}",
-        "/usr/bin/{$name}",
-        "/bin/{$name}",
-        "/root/.nvm/versions/node/v20.15.1/bin/{$name}",
-        "/root/.nvm/versions/node/v20.18.0/bin/{$name}",
-        "/root/.nvm/versions/node/v22.0.0/bin/{$name}",
-        "/usr/local/node/bin/{$name}",
-        "/root/.local/share/pnpm/{$name}",
-        "/usr/local/pnpm/{$name}",
-    ];
-    foreach ($paths as $path) {
-        if (file_exists($path) && is_executable($path)) {
-            return $path;
-        }
-    }
-    return $name; // fallback to PATH lookup
-}
-
-// Fix 6: Check whether shell_exec is available and not disabled
-function canRunShell(): bool {
+function sc_shell($cmd) {
     if (!function_exists('shell_exec')) {
-        return false;
+        return ['output' => 'shell_exec not available', 'ok' => false];
     }
     $disabled = array_map('trim', explode(',', (string) ini_get('disable_functions')));
-    return !in_array('shell_exec', $disabled, true);
+    if (in_array('shell_exec', $disabled, true)) {
+        return ['output' => 'shell_exec disabled in PHP config', 'ok' => false];
+    }
+    $output = @shell_exec($cmd . ' 2>&1');
+    return ['output' => $output ?? '', 'ok' => true];
 }
 
 // ---------------------------------------------------------------------------
-// AJAX Action Handlers
+// Helper: find a binary by checking known paths, then fall back to `which`
 // ---------------------------------------------------------------------------
-if (isset($_GET['action'])) {
-    // Fix 2: Buffer all output so stray warnings cannot corrupt JSON
-    ob_start();
-    header('Content-Type: application/json');
-
-    // Auth check for all actions
-    if (!isset($_SESSION['setup_auth'])) {
-        ob_end_clean();
-        echo json_encode(['error' => 'Unauthorized']);
-        exit;
+function sc_which($bin) {
+    $paths = [
+        "/usr/local/bin/$bin",
+        "/usr/bin/$bin",
+        "/bin/$bin",
+        "/root/.nvm/versions/node/v20.15.1/bin/$bin",
+        "/root/.nvm/versions/node/v20.18.0/bin/$bin",
+        "/root/.nvm/versions/node/v22.0.0/bin/$bin",
+        "/root/.local/share/pnpm/$bin",
+        "/usr/local/pnpm/$bin",
+        "/usr/local/node/bin/$bin",
+    ];
+    foreach ($paths as $p) {
+        if (is_executable($p)) return $p;
     }
+    $r = sc_shell("which $bin");
+    $found = trim($r['output']);
+    return ($found && strpos($found, 'not found') === false) ? $found : $bin;
+}
 
-    // Fix 4: Ensure common binary directories are on PATH for shell_exec
-    putenv('PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
-        . ':/root/.nvm/versions/node/v20.15.1/bin'
-        . ':/root/.nvm/versions/node/v20.18.0/bin'
-        . ':/root/.nvm/versions/node/v22.0.0/bin'
-        . ':/usr/local/node/bin'
-        . ':/root/.local/share/pnpm'
-        . ':/usr/local/pnpm');
+// ===========================================================================
+// AJAX ACTION HANDLERS — must exit before any HTML output
+// ===========================================================================
+if (!empty($_GET['action'])) {
+    // Discard anything buffered so far (e.g. stray PHP notices from session_start)
+    ob_clean();
+    header('Content-Type: application/json; charset=utf-8');
 
     $action = $_GET['action'];
 
-    try {
-        switch ($action) {
+    // Auth check — skip only for the 'auth' action itself
+    if ($action !== 'auth' && empty($_SESSION['sc_auth'])) {
+        echo json_encode(['error' => 'Not authenticated']);
+        exit;
+    }
 
-            case 'status':
-                ob_end_clean();
+    // -----------------------------------------------------------------------
+    // auth — validate setup password
+    // -----------------------------------------------------------------------
+    if ($action === 'auth') {
+        $pw = $_POST['password'] ?? '';
+        if ($pw === SETUP_PASSWORD) {
+            $_SESSION['sc_auth'] = true;
+            echo json_encode(['ok' => true]);
+        } else {
+            echo json_encode(['error' => 'Wrong password']);
+        }
+        exit;
+    }
 
-                if (!canRunShell()) {
-                    echo json_encode([
-                        'node'       => 'shell_exec disabled',
-                        'pnpm'       => 'shell_exec disabled',
-                        'git'        => 'shell_exec disabled',
-                        'env'        => file_exists(ENV_FILE),
-                        'dist'       => is_dir(DIST_DIR),
-                        'running'    => false,
-                        'pm2_output' => '',
-                        'shell_disabled' => true,
-                        'shell_disabled_msg' => 'shell_exec is disabled in PHP. Enable it in aaPanel → PHP → Disable Functions.',
-                    ]);
-                    break;
-                }
+    // -----------------------------------------------------------------------
+    // status — system environment check
+    // -----------------------------------------------------------------------
+    if ($action === 'status') {
+        $node = sc_which('node');
+        $pnpm = sc_which('pnpm');
+        $git  = sc_which('git');
+        $pm2  = sc_which('pm2');
 
-                $node    = findBinary('node');
-                $pnpm    = findBinary('pnpm');
-                $git     = findBinary('git');
-                $pm2     = findBinary('pm2');
+        $nodeVer = trim(sc_shell("$node --version")['output']);
+        $pnpmVer = trim(sc_shell("$pnpm --version")['output']);
+        $gitVer  = trim(sc_shell("$git --version")['output']);
+        $pm2Out  = sc_shell("$pm2 list 2>/dev/null");
+        $pm2Grep = sc_shell("$pm2 list 2>/dev/null | grep superclaw");
 
-                $nodeVersion = @shell_exec("{$node} --version 2>/dev/null");
-                $pnpmVersion = @shell_exec("{$pnpm} --version 2>/dev/null");
-                $gitVersion  = @shell_exec("{$git} --version 2>/dev/null");
-                $pm2List     = @shell_exec("{$pm2} list 2>/dev/null");
-                $pm2Status   = @shell_exec("{$pm2} list 2>/dev/null | grep superclaw");
+        $shellTest = sc_shell('echo ok');
 
-                $envExists  = file_exists(ENV_FILE);
-                $distExists = is_dir(DIST_DIR);
-                $scRunning  = $pm2Status
-                    ? (strpos($pm2Status, 'online') !== false)
-                    : false;
+        echo json_encode([
+            'node'              => $nodeVer ?: 'Not found',
+            'pnpm'              => $pnpmVer ?: 'Not found',
+            'git'               => $gitVer  ?: 'Not found',
+            'env'               => file_exists(PROJECT_ROOT . '/.env'),
+            'dist'              => is_dir(PROJECT_ROOT . '/dist'),
+            'running'           => strpos($pm2Grep['output'] ?? '', 'online') !== false,
+            'pm2_output'        => trim($pm2Out['output'] ?? ''),
+            'projectRoot'       => PROJECT_ROOT,
+            'shellOk'           => trim($shellTest['output']) === 'ok',
+            'shell_disabled'    => !$shellTest['ok'],
+            'shell_disabled_msg'=> $shellTest['ok'] ? '' : 'shell_exec is disabled in PHP. Enable it in aaPanel → PHP → Disable Functions.',
+        ]);
+        exit;
+    }
 
-                echo json_encode([
-                    'node'       => $nodeVersion ? trim($nodeVersion) : 'Not found',
-                    'pnpm'       => $pnpmVersion ? trim($pnpmVersion) : 'Not found',
-                    'git'        => $gitVersion  ? trim($gitVersion)  : 'Not found',
-                    'env'        => $envExists,
-                    'dist'       => $distExists,
-                    'running'    => $scRunning,
-                    'pm2_output' => $pm2List ? trim($pm2List) : '',
-                ]);
-                break;
+    // -----------------------------------------------------------------------
+    // install — run pnpm install
+    // -----------------------------------------------------------------------
+    if ($action === 'install') {
+        set_time_limit(300);
+        $pnpm = sc_which('pnpm');
+        $root = escapeshellarg(PROJECT_ROOT);
+        $r    = sc_shell("cd $root && $pnpm install");
+        echo json_encode(['output' => $r['output'], 'ok' => $r['ok'], 'success' => $r['ok']]);
+        exit;
+    }
 
-            case 'install':
-                ob_end_clean();
-                set_time_limit(300);
+    // -----------------------------------------------------------------------
+    // build — run pnpm build
+    // -----------------------------------------------------------------------
+    if ($action === 'build') {
+        set_time_limit(300);
+        $pnpm = sc_which('pnpm');
+        $root = escapeshellarg(PROJECT_ROOT);
+        $r    = sc_shell("cd $root && $pnpm build");
+        echo json_encode(['output' => $r['output'], 'ok' => $r['ok'], 'success' => $r['ok']]);
+        exit;
+    }
 
-                if (!canRunShell()) {
-                    echo json_encode(['error' => 'shell_exec is disabled. Enable it in aaPanel → PHP → Disable Functions.', 'output' => '']);
-                    break;
-                }
+    // -----------------------------------------------------------------------
+    // configure — write .env file
+    // -----------------------------------------------------------------------
+    if ($action === 'configure') {
+        // Accept both JSON body and form-encoded POST
+        $raw  = file_get_contents('php://input');
+        $data = ($raw && ($decoded = json_decode($raw, true))) ? $decoded : $_POST;
 
-                $pnpm   = findBinary('pnpm');
-                $output = @shell_exec('cd ' . escapeshellarg(PROJECT_ROOT) . " && {$pnpm} install 2>&1");
-                echo json_encode(['output' => $output ?: 'No output (shell_exec may be disabled)', 'success' => true]);
-                break;
+        $provider  = $data['ai_provider']       ?? 'openai';
+        $apiKey    = $data['api_key']            ?? '';
+        $model     = $data['ai_model']           ?? 'gpt-4o';
+        $tgToken   = $data['telegram_token']     ?? '';
+        $adminId   = $data['admin_telegram_id']  ?? '';
+        $agentName = $data['agent_name']         ?? 'SuperClaw';
+        $waEnabled = !empty($data['whatsapp_enabled']) && $data['whatsapp_enabled'] === '1';
+        $waNumber  = $data['whatsapp_number']    ?? '';
 
-            case 'build':
-                ob_end_clean();
-                set_time_limit(300);
+        $hostname = trim(sc_shell('hostname 2>/dev/null')['output']) ?: 'my-vps';
 
-                if (!canRunShell()) {
-                    echo json_encode(['error' => 'shell_exec is disabled. Enable it in aaPanel → PHP → Disable Functions.', 'output' => '']);
-                    break;
-                }
+        // Build provider-specific key line
+        $providerKeyMap = [
+            'openai'    => "OPENAI_API_KEY=$apiKey",
+            'anthropic' => "ANTHROPIC_API_KEY=$apiKey",
+            'groq'      => "GROQ_API_KEY=$apiKey",
+            'ollama'    => "OLLAMA_BASE_URL=$apiKey",
+            'custom'    => "CUSTOM_AI_BASE_URL=$apiKey\nCUSTOM_AI_API_KEY=\nCUSTOM_AI_MODEL=$model",
+        ];
+        $providerKeys = $providerKeyMap[$provider] ?? "OPENAI_API_KEY=$apiKey";
 
-                $pnpm   = findBinary('pnpm');
-                $output = @shell_exec('cd ' . escapeshellarg(PROJECT_ROOT) . " && {$pnpm} build 2>&1");
-                echo json_encode(['output' => $output ?: 'No output (shell_exec may be disabled)', 'success' => true]);
-                break;
+        $waLine = $waEnabled
+            ? "ADMIN_WHATSAPP_NUMBER=$waNumber\nADMIN_WHATSAPP_NUMBERS="
+            : "ADMIN_WHATSAPP_NUMBER=\nADMIN_WHATSAPP_NUMBERS=";
 
-            case 'configure':
-                ob_end_clean();
-                $provider  = $_POST['ai_provider']       ?? 'openai';
-                $apiKey    = $_POST['api_key']           ?? '';
-                $model     = $_POST['ai_model']          ?? 'gpt-4o';
-                $tgToken   = $_POST['telegram_token']    ?? '';
-                $tgAdminId = $_POST['admin_telegram_id'] ?? '';
-                $agentName = $_POST['agent_name']        ?? 'SuperClaw';
-                $waEnabled = isset($_POST['whatsapp_enabled']) && $_POST['whatsapp_enabled'] === '1';
-                $waNumber  = $_POST['whatsapp_number']   ?? '';
-                $hostname  = canRunShell()
-                    ? (trim((string) @shell_exec('hostname 2>/dev/null')) ?: 'my-vps')
-                    : 'my-vps';
-
-                // Build provider-specific key lines
-                $providerKeys = '';
-                switch ($provider) {
-                    case 'openai':
-                        $providerKeys = "OPENAI_API_KEY={$apiKey}";
-                        break;
-                    case 'anthropic':
-                        $providerKeys = "ANTHROPIC_API_KEY={$apiKey}";
-                        break;
-                    case 'groq':
-                        $providerKeys = "GROQ_API_KEY={$apiKey}";
-                        break;
-                    case 'ollama':
-                        $providerKeys = "OLLAMA_BASE_URL={$apiKey}";
-                        break;
-                    case 'custom':
-                        $providerKeys = "CUSTOM_AI_BASE_URL={$apiKey}\nCUSTOM_AI_API_KEY=\nCUSTOM_AI_MODEL={$model}";
-                        break;
-                }
-
-                $waLine = $waEnabled
-                    ? "ADMIN_WHATSAPP_NUMBER={$waNumber}\nADMIN_WHATSAPP_NUMBERS="
-                    : "ADMIN_WHATSAPP_NUMBER=\nADMIN_WHATSAPP_NUMBERS=";
-
-                $env = <<<ENV
+        $env = <<<ENV
 # ============================================================
 # SuperClaw — Environment Configuration
 # Generated by PHP Setup Wizard
@@ -196,7 +186,7 @@ if (isset($_GET['action'])) {
 
 # --- AI Provider ---
 # Options: openai | anthropic | groq | ollama | custom
-AI_PROVIDER={$provider}
+AI_PROVIDER=$provider
 
 # API Keys (only the relevant one is set)
 OPENAI_API_KEY=
@@ -208,24 +198,24 @@ CUSTOM_AI_MODEL=gpt-4o
 CUSTOM_AI_API_KEY=
 
 # Active provider key
-{$providerKeys}
+$providerKeys
 
 # AI Model
-AI_MODEL={$model}
+AI_MODEL=$model
 
 # --- Telegram ---
-TELEGRAM_BOT_TOKEN={$tgToken}
-ADMIN_TELEGRAM_ID={$tgAdminId}
+TELEGRAM_BOT_TOKEN=$tgToken
+ADMIN_TELEGRAM_ID=$adminId
 
 # --- WhatsApp ---
 WHATSAPP_SESSION_NAME=superclaw
-{$waLine}
+$waLine
 
 # --- Agent Identity ---
-AGENT_NAME={$agentName}
+AGENT_NAME=$agentName
 
 # --- VPS Info ---
-VPS_HOSTNAME={$hostname}
+VPS_HOSTNAME=$hostname
 
 # --- Logging ---
 LOG_LEVEL=info
@@ -250,55 +240,51 @@ MAX_CONCURRENT_AGENTS=5
 SUBAGENT_TIMEOUT_MS=600000
 ENV;
 
-                $written = file_put_contents(ENV_FILE, $env);
-                if ($written !== false) {
-                    echo json_encode(['success' => true, 'message' => '.env file written successfully.']);
-                } else {
-                    echo json_encode(['error' => 'Failed to write .env file. Check PHP write permissions on ' . PROJECT_ROOT]);
-                }
-                break;
-
-            case 'start_pm2':
-                ob_end_clean();
-                set_time_limit(60);
-
-                if (!canRunShell()) {
-                    echo json_encode(['error' => 'shell_exec is disabled. Enable it in aaPanel → PHP → Disable Functions.', 'output' => '']);
-                    break;
-                }
-
-                $pm2    = findBinary('pm2');
-                $output = @shell_exec('cd ' . escapeshellarg(PROJECT_ROOT) . " && {$pm2} start ecosystem.config.js 2>&1 && {$pm2} save 2>&1");
-                echo json_encode(['output' => $output ?: 'No output (shell_exec may be disabled)']);
-                break;
-
-            default:
-                ob_end_clean();
-                echo json_encode(['error' => 'Unknown action']);
+        $written = file_put_contents(PROJECT_ROOT . '/.env', $env);
+        if ($written !== false) {
+            echo json_encode(['success' => true, 'ok' => true, 'message' => '.env file written successfully.']);
+        } else {
+            echo json_encode(['error' => 'Failed to write .env file. Check PHP write permissions on ' . PROJECT_ROOT]);
         }
-    } catch (Exception $e) {
-        ob_end_clean();
-        echo json_encode(['error' => $e->getMessage()]);
+        exit;
     }
+
+    // -----------------------------------------------------------------------
+    // start_pm2 — launch SuperClaw via PM2
+    // -----------------------------------------------------------------------
+    if ($action === 'start_pm2') {
+        set_time_limit(60);
+        $pm2  = sc_which('pm2');
+        $root = escapeshellarg(PROJECT_ROOT);
+        $r    = sc_shell("cd $root && $pm2 start ecosystem.config.js && $pm2 save");
+        echo json_encode(['output' => $r['output'], 'ok' => $r['ok']]);
+        exit;
+    }
+
+    // Unknown action
+    echo json_encode(['error' => 'Unknown action: ' . htmlspecialchars($action)]);
     exit;
 }
 
-// ---------------------------------------------------------------------------
-// Auth handling (page load)
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// PAGE AUTH HANDLING (form POST on page load)
+// ===========================================================================
 $authError = false;
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['setup_password'])) {
     if ($_POST['setup_password'] === SETUP_PASSWORD) {
-        $_SESSION['setup_auth'] = true;
+        $_SESSION['sc_auth'] = true;
     } else {
         $authError = true;
     }
 }
 
-$isAuthed   = isset($_SESSION['setup_auth']) && $_SESSION['setup_auth'] === true;
-$envExists  = file_exists(ENV_FILE);
-$distExists = is_dir(DIST_DIR);
+$isAuthed   = !empty($_SESSION['sc_auth']);
+$envExists  = file_exists(PROJECT_ROOT . '/.env');
+$distExists = is_dir(PROJECT_ROOT . '/dist');
 $setupDone  = $envExists && $distExists;
+
+// Flush the output buffer and start sending HTML
+ob_end_flush();
 ?>
 <!DOCTYPE html>
 <html lang="en" class="dark">
@@ -306,6 +292,15 @@ $setupDone  = $envExists && $distExists;
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>SuperClaw — Setup Wizard</title>
+<script>
+// Prevent aaPanel share-modal.js (and similar injected scripts) from crashing the page
+window.addEventListener('error', function(e) {
+    if (e.filename && (e.filename.includes('share-modal') || e.filename.includes('aapanel'))) {
+        e.preventDefault();
+        return true;
+    }
+}, true);
+</script>
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
   tailwind.config = {
@@ -331,20 +326,16 @@ $setupDone  = $envExists && $distExists;
   }
 </script>
 <style>
-  /* Scrollbar styling */
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: #1e293b; }
   ::-webkit-scrollbar-thumb { background: #0d9488; border-radius: 3px; }
 
-  /* Spinner */
   @keyframes spin { to { transform: rotate(360deg); } }
   .spinner { animation: spin 0.8s linear infinite; }
 
-  /* Step transition */
   .step-panel { display: none; }
   .step-panel.active { display: block; }
 
-  /* Terminal output */
   .terminal {
     background: #0a0f1a;
     color: #4ade80;
@@ -360,20 +351,13 @@ $setupDone  = $envExists && $distExists;
     word-break: break-all;
   }
 
-  /* Card hover */
   .launch-card { transition: border-color 0.2s, box-shadow 0.2s; }
   .launch-card:hover { border-color: #14b8a6; box-shadow: 0 0 0 1px #14b8a6; }
-
-  /* Toggle switch */
-  .toggle-checkbox:checked { right: 0; border-color: #14b8a6; }
-  .toggle-checkbox:checked + .toggle-label { background-color: #14b8a6; }
 </style>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen font-sans antialiased">
 
-<!-- =========================================================
-     LIGHT/DARK TOGGLE
-     ========================================================= -->
+<!-- Light/Dark Toggle -->
 <div class="fixed top-4 right-4 z-50">
   <button id="themeToggle"
     class="p-2 rounded-full bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 hover:text-white transition-all"
@@ -395,7 +379,6 @@ $setupDone  = $envExists && $distExists;
 <?php if (!$isAuthed): ?>
 <div class="min-h-screen flex items-center justify-center px-4">
   <div class="w-full max-w-md">
-    <!-- Logo -->
     <div class="text-center mb-8">
       <div class="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-brand-900 border border-brand-700 mb-4">
         <span class="text-4xl">🦞</span>
@@ -404,7 +387,6 @@ $setupDone  = $envExists && $distExists;
       <p class="text-gray-400 mt-1">Setup Wizard</p>
     </div>
 
-    <!-- Auth card -->
     <div class="bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-2xl">
       <h2 class="text-xl font-semibold text-white mb-2">Access Required</h2>
       <p class="text-gray-400 text-sm mb-6">Enter the setup password to continue. Default: <code class="text-brand-400 bg-gray-800 px-1 rounded">superclaw</code></p>
@@ -444,7 +426,7 @@ $setupDone  = $envExists && $distExists;
   </div>
 </div>
 
-<?php elseif ($setupDone): ?>
+<?php elseif ($setupDone && empty($_GET['force'])): ?>
 <!-- =========================================================
      SETUP COMPLETE PAGE
      ========================================================= -->
@@ -488,7 +470,7 @@ $setupDone  = $envExists && $distExists;
 
 <?php else: ?>
 <!-- =========================================================
-     MAIN WIZARD
+     MAIN WIZARD (5 steps)
      ========================================================= -->
 <div class="max-w-3xl mx-auto px-4 py-10">
 
@@ -535,7 +517,6 @@ $setupDone  = $envExists && $distExists;
       <h2 class="text-xl font-semibold text-white mb-1">Step 1 — System Check</h2>
       <p class="text-gray-400 text-sm mb-6">Verifying your server environment before we begin.</p>
 
-      <!-- Status table -->
       <div class="overflow-hidden rounded-xl border border-gray-800 mb-6">
         <table class="w-full text-sm">
           <thead>
@@ -545,7 +526,7 @@ $setupDone  = $envExists && $distExists;
               <th class="text-left px-4 py-3 text-gray-400 font-medium">Details</th>
             </tr>
           </thead>
-          <tbody id="statusTable" class="divide-y divide-gray-800">
+          <tbody id="status-table" class="divide-y divide-gray-800">
             <tr>
               <td colspan="3" class="px-4 py-6 text-center text-gray-500">
                 <div class="flex items-center justify-center gap-2">
@@ -561,7 +542,6 @@ $setupDone  = $envExists && $distExists;
         </table>
       </div>
 
-      <!-- Action buttons -->
       <div class="flex flex-col sm:flex-row gap-3">
         <button id="btnStartSetup"
           class="flex-1 bg-brand-600 hover:bg-brand-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold py-3 px-6 rounded-xl transition-colors"
@@ -575,7 +555,6 @@ $setupDone  = $envExists && $distExists;
       </div>
     </div>
 
-    <!-- Terminal commands panel (hidden by default) -->
     <div id="terminalPanel" class="hidden bg-gray-900 border border-gray-800 rounded-2xl p-6">
       <h3 class="font-semibold text-white mb-3">Terminal Setup Commands</h3>
       <p class="text-gray-400 text-sm mb-4">Run these commands on your VPS via SSH:</p>
@@ -817,7 +796,6 @@ pm2 startup"
 
       <div id="pm2Status" class="hidden mb-4 p-3 rounded-lg text-sm"></div>
 
-      <!-- Launch cards -->
       <div class="grid gap-4 mb-6">
 
         <!-- PM2 Card -->
@@ -879,7 +857,6 @@ echo htmlspecialchars("cd {$root}\nnode dist/index.js");
         </div>
       </div>
 
-      <!-- PM2 output -->
       <div id="pm2Output" class="hidden">
         <div class="flex items-center gap-2 mb-2">
           <span class="text-xs text-gray-400">PM2 Output:</span>
@@ -887,7 +864,6 @@ echo htmlspecialchars("cd {$root}\nnode dist/index.js");
         <pre id="pm2OutputPre" class="terminal"></pre>
       </div>
 
-      <!-- Security notice -->
       <div class="mt-6 bg-yellow-900/30 border border-yellow-700/50 rounded-xl p-4">
         <p class="text-yellow-300 text-sm">
           <strong>⚠️ Security Reminder:</strong> Delete <code class="bg-yellow-900/50 px-1 rounded">setup/index.php</code> from your server after setup is complete.
@@ -907,52 +883,67 @@ echo htmlspecialchars("cd {$root}\nnode dist/index.js");
 // Theme toggle
 // ---------------------------------------------------------------------------
 (function() {
-  const saved = localStorage.getItem('sc-theme');
+  var saved = localStorage.getItem('sc-theme');
   if (saved === 'light') {
     document.documentElement.classList.remove('dark');
-    document.getElementById('iconMoon').classList.add('hidden');
-    document.getElementById('iconSun').classList.remove('hidden');
+    var moon = document.getElementById('iconMoon');
+    var sun  = document.getElementById('iconSun');
+    if (moon) moon.classList.add('hidden');
+    if (sun)  sun.classList.remove('hidden');
   }
 })();
 
-document.getElementById('themeToggle').addEventListener('click', function() {
-  const html = document.documentElement;
-  const isDark = html.classList.contains('dark');
-  if (isDark) {
-    html.classList.remove('dark');
-    html.classList.add('light');
-    localStorage.setItem('sc-theme', 'light');
-    document.getElementById('iconMoon').classList.add('hidden');
-    document.getElementById('iconSun').classList.remove('hidden');
-  } else {
-    html.classList.remove('light');
-    html.classList.add('dark');
-    localStorage.setItem('sc-theme', 'dark');
-    document.getElementById('iconMoon').classList.remove('hidden');
-    document.getElementById('iconSun').classList.add('hidden');
-  }
-});
+var themeBtn = document.getElementById('themeToggle');
+if (themeBtn) {
+  themeBtn.addEventListener('click', function() {
+    var html = document.documentElement;
+    var isDark = html.classList.contains('dark');
+    var moon = document.getElementById('iconMoon');
+    var sun  = document.getElementById('iconSun');
+    if (isDark) {
+      html.classList.remove('dark');
+      html.classList.add('light');
+      localStorage.setItem('sc-theme', 'light');
+      if (moon) moon.classList.add('hidden');
+      if (sun)  sun.classList.remove('hidden');
+    } else {
+      html.classList.remove('light');
+      html.classList.add('dark');
+      localStorage.setItem('sc-theme', 'dark');
+      if (moon) moon.classList.remove('hidden');
+      if (sun)  sun.classList.add('hidden');
+    }
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Auth page helpers
 // ---------------------------------------------------------------------------
 function toggleAuthPw() {
-  const inp = document.getElementById('authPassword');
+  var inp = document.getElementById('authPassword');
   if (!inp) return;
   inp.type = inp.type === 'password' ? 'text' : 'password';
 }
 
 // ---------------------------------------------------------------------------
-// Wizard state
+// Wizard (only active when authenticated and setup not done)
 // ---------------------------------------------------------------------------
-<?php if ($isAuthed && !$setupDone): ?>
+<?php if ($isAuthed && (!$setupDone || !empty($_GET['force']))): ?>
 
-let currentStep = 1;
-const TOTAL_STEPS = 5;
+var currentStep = 1;
+var TOTAL_STEPS = 5;
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
 function showStep(n) {
-  for (let i = 1; i <= TOTAL_STEPS; i++) {
-    const panel = document.getElementById('step-' + i);
+  for (var i = 1; i <= TOTAL_STEPS; i++) {
+    var panel = document.getElementById('step-' + i);
     if (panel) panel.classList.toggle('active', i === n);
   }
   currentStep = n;
@@ -961,31 +952,28 @@ function showStep(n) {
 }
 
 function updateProgress(active) {
-  for (let i = 1; i <= TOTAL_STEPS; i++) {
-    const dot   = document.getElementById('step-dot-' + i);
-    const num   = document.getElementById('step-dot-num-' + i);
-    const check = document.getElementById('step-dot-check-' + i);
-    const label = document.getElementById('step-label-' + i);
-    const line  = document.getElementById('step-line-' + i);
+  for (var i = 1; i <= TOTAL_STEPS; i++) {
+    var dot   = document.getElementById('step-dot-' + i);
+    var num   = document.getElementById('step-dot-num-' + i);
+    var check = document.getElementById('step-dot-check-' + i);
+    var label = document.getElementById('step-label-' + i);
+    var line  = document.getElementById('step-line-' + i);
 
     if (!dot) continue;
 
     if (i < active) {
-      // Completed
       dot.className = 'w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold border-2 transition-all duration-300 bg-brand-600 border-brand-500 text-white';
-      if (num) num.classList.add('hidden');
+      if (num)   num.classList.add('hidden');
       if (check) check.classList.remove('hidden');
       if (label) label.className = 'text-xs mt-1 text-brand-400 hidden sm:block text-center';
     } else if (i === active) {
-      // Active
       dot.className = 'w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold border-2 transition-all duration-300 bg-brand-600 border-brand-500 text-white';
-      if (num) num.classList.remove('hidden');
+      if (num)   num.classList.remove('hidden');
       if (check) check.classList.add('hidden');
       if (label) label.className = 'text-xs mt-1 text-brand-400 hidden sm:block text-center';
     } else {
-      // Future
       dot.className = 'w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold border-2 transition-all duration-300 bg-gray-800 border-gray-700 text-gray-500';
-      if (num) num.classList.remove('hidden');
+      if (num)   num.classList.remove('hidden');
       if (check) check.classList.add('hidden');
       if (label) label.className = 'text-xs mt-1 text-gray-600 hidden sm:block text-center';
     }
@@ -1003,65 +991,83 @@ function updateProgress(active) {
 // ---------------------------------------------------------------------------
 function statusBadge(ok, text) {
   if (ok === true) {
-    return `<span class="inline-flex items-center gap-1 text-green-400"><svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>${text}</span>`;
+    return '<span class="inline-flex items-center gap-1 text-green-400"><svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>' + text + '</span>';
   } else if (ok === false) {
-    return `<span class="inline-flex items-center gap-1 text-red-400"><svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>${text}</span>`;
+    return '<span class="inline-flex items-center gap-1 text-red-400"><svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' + text + '</span>';
   } else {
-    return `<span class="inline-flex items-center gap-1 text-yellow-400"><svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>${text}</span>`;
+    return '<span class="inline-flex items-center gap-1 text-yellow-400"><svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' + text + '</span>';
   }
 }
 
-function loadStatus() {
-  fetch('?action=status')
-    .then(r => r.json())
-    .then(data => {
-      const nodeOk = data.node && !data.node.includes('Not found') && !data.node.includes('command not found');
-      const pnpmOk = data.pnpm && !data.pnpm.includes('Not found') && !data.pnpm.includes('command not found');
-      const gitOk  = data.git  && !data.git.includes('Not found')  && !data.git.includes('command not found');
+async function loadStatus() {
+  try {
+    var resp = await fetch('?action=status');
+    if (!resp.ok) {
+      throw new Error('HTTP ' + resp.status + ': ' + resp.statusText);
+    }
+    var text = await resp.text();
+    var data;
+    try {
+      data = JSON.parse(text);
+    } catch(e) {
+      throw new Error('Server returned invalid JSON: ' + text.substring(0, 300));
+    }
 
-      const rows = [
-        ['Node.js',          nodeOk,      data.node],
-        ['pnpm',             pnpmOk,      data.pnpm],
-        ['Git',              gitOk,       data.git],
-        ['.env file',        data.env,    data.env ? 'Found' : 'Not found (will be created)'],
-        ['dist/ (built)',    data.dist,   data.dist ? 'Found' : 'Not built yet'],
-        ['SuperClaw running',data.running, data.running ? 'Online (PM2)' : 'Not running'],
-      ];
+    if (data.error) {
+      throw new Error(data.error);
+    }
 
-      let html = '';
-      rows.forEach(([name, ok, detail]) => {
-        html += `<tr class="hover:bg-gray-800/30 transition-colors">
-          <td class="px-4 py-3 text-gray-300 font-medium">${name}</td>
-          <td class="px-4 py-3">${statusBadge(ok, ok ? 'OK' : 'Missing')}</td>
-          <td class="px-4 py-3 text-gray-400 text-xs font-mono">${escHtml(detail || '')}</td>
-        </tr>`;
-      });
+    var nodeOk = data.node && !data.node.includes('Not found') && !data.node.includes('command not found') && !data.node.includes('disabled');
+    var pnpmOk = data.pnpm && !data.pnpm.includes('Not found') && !data.pnpm.includes('command not found') && !data.pnpm.includes('disabled');
+    var gitOk  = data.git  && !data.git.includes('Not found')  && !data.git.includes('command not found')  && !data.git.includes('disabled');
 
-      document.getElementById('statusTable').innerHTML = html;
+    var rows = [
+      ['Node.js',           nodeOk,      data.node],
+      ['pnpm',              pnpmOk,      data.pnpm],
+      ['Git',               gitOk,       data.git],
+      ['.env file',         data.env,    data.env  ? 'Found' : 'Not found (will be created)'],
+      ['dist/ (built)',     data.dist,   data.dist ? 'Found' : 'Not built yet'],
+      ['SuperClaw running', data.running, data.running ? 'Online (PM2)' : 'Not running'],
+      ['Shell access',      data.shellOk, data.shellOk ? 'Available' : (data.shell_disabled_msg || 'Disabled')],
+      ['Project root',      null,        data.projectRoot || ''],
+    ];
 
-      // Enable start button if Node + pnpm are available
-      if (nodeOk && pnpmOk) {
-        document.getElementById('btnStartSetup').disabled = false;
-      }
-    })
-    .catch(err => {
-      document.getElementById('statusTable').innerHTML =
-        `<tr><td colspan="3" class="px-4 py-4 text-red-400 text-sm">Failed to load status: ${escHtml(err.message)}</td></tr>`;
+    var html = '';
+    rows.forEach(function(row) {
+      var name = row[0], ok = row[1], detail = row[2];
+      html += '<tr class="hover:bg-gray-800/30 transition-colors">'
+        + '<td class="px-4 py-3 text-gray-300 font-medium">' + escHtml(name) + '</td>'
+        + '<td class="px-4 py-3">' + (ok === null ? '' : statusBadge(ok, ok ? 'OK' : 'Missing')) + '</td>'
+        + '<td class="px-4 py-3 text-gray-400 text-xs font-mono">' + escHtml(detail || '') + '</td>'
+        + '</tr>';
     });
+
+    document.getElementById('status-table').innerHTML = html;
+
+    if (nodeOk && pnpmOk) {
+      document.getElementById('btnStartSetup').disabled = false;
+    }
+
+    if (data.shell_disabled) {
+      var warn = document.createElement('div');
+      warn.className = 'mt-4 p-3 rounded-lg bg-yellow-900/40 border border-yellow-700 text-yellow-300 text-sm';
+      warn.textContent = '⚠️ ' + (data.shell_disabled_msg || 'shell_exec is disabled.');
+      document.getElementById('status-table').closest('div').after(warn);
+    }
+
+  } catch(err) {
+    document.getElementById('status-table').innerHTML =
+      '<tr><td colspan="3" class="text-red-400 p-4">❌ Error loading status: ' + escHtml(err.message) + '</td></tr>';
+  }
 }
 
-function escHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
+var btnStartSetup = document.getElementById('btnStartSetup');
+if (btnStartSetup) btnStartSetup.addEventListener('click', function() { showStep(2); });
 
-document.getElementById('btnStartSetup').addEventListener('click', () => showStep(2));
-document.getElementById('btnTerminal').addEventListener('click', () => {
-  const panel = document.getElementById('terminalPanel');
-  panel.classList.toggle('hidden');
+var btnTerminal = document.getElementById('btnTerminal');
+if (btnTerminal) btnTerminal.addEventListener('click', function() {
+  var panel = document.getElementById('terminalPanel');
+  if (panel) panel.classList.toggle('hidden');
 });
 
 // Load status on page load
@@ -1070,15 +1076,16 @@ loadStatus();
 // ---------------------------------------------------------------------------
 // Step 2 — Install
 // ---------------------------------------------------------------------------
-document.getElementById('btnInstall').addEventListener('click', function() {
-  const btn = this;
+var btnInstall = document.getElementById('btnInstall');
+if (btnInstall) btnInstall.addEventListener('click', function() {
+  var btn = this;
   btn.disabled = true;
-  btn.innerHTML = `<svg class="spinner h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg> Installing...`;
+  btn.innerHTML = '<svg class="spinner h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg> Installing...';
 
-  const outputWrap = document.getElementById('installOutput');
-  const outputPre  = document.getElementById('installOutputPre');
-  const spinner    = document.getElementById('installSpinner');
-  const label      = document.getElementById('installOutputLabel');
+  var outputWrap = document.getElementById('installOutput');
+  var outputPre  = document.getElementById('installOutputPre');
+  var spinner    = document.getElementById('installSpinner');
+  var label      = document.getElementById('installOutputLabel');
 
   outputWrap.classList.remove('hidden');
   spinner.classList.remove('hidden');
@@ -1086,15 +1093,15 @@ document.getElementById('btnInstall').addEventListener('click', function() {
   outputPre.textContent = '';
 
   fetch('?action=install', { method: 'POST' })
-    .then(r => r.json())
-    .then(data => {
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
       spinner.classList.add('hidden');
       label.textContent = 'Output:';
       outputPre.textContent = data.output || data.error || '(no output)';
       outputPre.scrollTop = outputPre.scrollHeight;
 
-      const success = !data.error && data.output && !data.output.toLowerCase().includes('err_');
-      const statusEl = document.getElementById('installStatus');
+      var success = !data.error && data.output && !data.output.toLowerCase().includes('err_');
+      var statusEl = document.getElementById('installStatus');
       statusEl.classList.remove('hidden');
 
       if (success) {
@@ -1105,16 +1112,15 @@ document.getElementById('btnInstall').addEventListener('click', function() {
         statusEl.className = 'mb-4 p-3 rounded-lg text-sm bg-red-900/40 border border-red-700 text-red-300';
         statusEl.textContent = '❌ ' + data.error;
       } else {
-        // Show next anyway — pnpm may have warnings but still succeeded
         statusEl.className = 'mb-4 p-3 rounded-lg text-sm bg-yellow-900/40 border border-yellow-700 text-yellow-300';
         statusEl.textContent = '⚠️ Installation completed with warnings. Review output above.';
         document.getElementById('installNextWrap').classList.remove('hidden');
       }
 
       btn.disabled = false;
-      btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg> Re-run Install`;
+      btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg> Re-run Install';
     })
-    .catch(err => {
+    .catch(function(err) {
       spinner.classList.add('hidden');
       outputPre.textContent = 'Request failed: ' + err.message;
       btn.disabled = false;
@@ -1122,95 +1128,98 @@ document.getElementById('btnInstall').addEventListener('click', function() {
     });
 });
 
-document.getElementById('btnInstallNext').addEventListener('click', () => showStep(3));
+var btnInstallNext = document.getElementById('btnInstallNext');
+if (btnInstallNext) btnInstallNext.addEventListener('click', function() { showStep(3); });
 
 // ---------------------------------------------------------------------------
 // Step 3 — Configure
 // ---------------------------------------------------------------------------
-const providerDefaults = {
-  openai:    { model: 'gpt-4o',                      label: 'OpenAI API Key',       hint: 'Get your key from platform.openai.com',    placeholder: 'sk-...' },
-  anthropic: { model: 'claude-3-5-sonnet-20241022',  label: 'Anthropic API Key',    hint: 'Get your key from console.anthropic.com',  placeholder: 'sk-ant-...' },
-  groq:      { model: 'llama3-70b-8192',             label: 'Groq API Key',         hint: 'Get your key from console.groq.com',       placeholder: 'gsk_...' },
-  ollama:    { model: 'llama3.2',                    label: 'Ollama Base URL',      hint: 'Default: http://localhost:11434',           placeholder: 'http://localhost:11434' },
-  custom:    { model: 'gpt-4o',                      label: 'Custom API Base URL',  hint: 'e.g. https://openrouter.ai/api/v1',        placeholder: 'https://...' },
+var providerDefaults = {
+  openai:    { model: 'gpt-4o',                     label: 'OpenAI API Key',      hint: 'Get your key from platform.openai.com',   placeholder: 'sk-...' },
+  anthropic: { model: 'claude-3-5-sonnet-20241022', label: 'Anthropic API Key',   hint: 'Get your key from console.anthropic.com', placeholder: 'sk-ant-...' },
+  groq:      { model: 'llama3-70b-8192',            label: 'Groq API Key',        hint: 'Get your key from console.groq.com',      placeholder: 'gsk_...' },
+  ollama:    { model: 'llama3.2',                   label: 'Ollama Base URL',     hint: 'Default: http://localhost:11434',          placeholder: 'http://localhost:11434' },
+  custom:    { model: 'gpt-4o',                     label: 'Custom API Base URL', hint: 'e.g. https://openrouter.ai/api/v1',       placeholder: 'https://...' },
 };
 
-document.getElementById('aiProvider').addEventListener('change', function() {
-  const d = providerDefaults[this.value] || providerDefaults.openai;
-  document.getElementById('aiModel').value       = d.model;
-  document.getElementById('apiKeyLabel').textContent = d.label;
-  document.getElementById('apiKeyHint').textContent  = d.hint;
-  document.getElementById('apiKey').placeholder      = d.placeholder;
+var aiProviderSel = document.getElementById('aiProvider');
+if (aiProviderSel) aiProviderSel.addEventListener('change', function() {
+  var d = providerDefaults[this.value] || providerDefaults.openai;
+  document.getElementById('aiModel').value            = d.model;
+  document.getElementById('apiKeyLabel').textContent  = d.label;
+  document.getElementById('apiKeyHint').textContent   = d.hint;
+  document.getElementById('apiKey').placeholder       = d.placeholder;
   document.getElementById('apiKey').type = this.value === 'ollama' ? 'text' : 'password';
 });
 
 function toggleApiKey() {
-  const inp = document.getElementById('apiKey');
-  inp.type = inp.type === 'password' ? 'text' : 'password';
+  var inp = document.getElementById('apiKey');
+  if (inp) inp.type = inp.type === 'password' ? 'text' : 'password';
 }
 
 function toggleWhatsApp(cb) {
-  const wrap  = document.getElementById('waNumberWrap');
-  const track = document.getElementById('waToggleTrack');
-  const thumb = document.getElementById('waToggleThumb');
-  const hidden = document.getElementById('waEnabledInput');
+  var wrap  = document.getElementById('waNumberWrap');
+  var track = document.getElementById('waToggleTrack');
+  var thumb = document.getElementById('waToggleThumb');
+  var hidden = document.getElementById('waEnabledInput');
 
   if (cb.checked) {
-    wrap.classList.remove('hidden');
-    track.style.backgroundColor = '#14b8a6';
-    thumb.style.transform = 'translateX(20px)';
-    thumb.style.backgroundColor = '#fff';
-    hidden.value = '1';
+    if (wrap)   wrap.classList.remove('hidden');
+    if (track)  track.style.backgroundColor = '#14b8a6';
+    if (thumb)  { thumb.style.transform = 'translateX(20px)'; thumb.style.backgroundColor = '#fff'; }
+    if (hidden) hidden.value = '1';
   } else {
-    wrap.classList.add('hidden');
-    track.style.backgroundColor = '';
-    thumb.style.transform = '';
-    thumb.style.backgroundColor = '';
-    hidden.value = '0';
+    if (wrap)   wrap.classList.add('hidden');
+    if (track)  track.style.backgroundColor = '';
+    if (thumb)  { thumb.style.transform = ''; thumb.style.backgroundColor = ''; }
+    if (hidden) hidden.value = '0';
   }
 }
 
-document.getElementById('configForm').addEventListener('submit', function(e) {
+var configForm = document.getElementById('configForm');
+if (configForm) configForm.addEventListener('submit', function(e) {
   e.preventDefault();
-  const formData = new FormData(this);
-  const statusEl = document.getElementById('configStatus');
+  var formData = new FormData(this);
+  var statusEl = document.getElementById('configStatus');
 
   statusEl.className = 'mb-4 p-3 rounded-lg text-sm bg-gray-800 border border-gray-700 text-gray-300';
   statusEl.classList.remove('hidden');
   statusEl.textContent = '⏳ Saving configuration...';
 
   fetch('?action=configure', { method: 'POST', body: formData })
-    .then(r => r.json())
-    .then(data => {
-      if (data.success) {
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.success || data.ok) {
         statusEl.className = 'mb-4 p-3 rounded-lg text-sm bg-green-900/40 border border-green-700 text-green-300';
-        statusEl.textContent = '✅ ' + data.message;
+        statusEl.textContent = '✅ ' + (data.message || '.env saved successfully.');
         document.getElementById('configNextWrap').classList.remove('hidden');
       } else {
         statusEl.className = 'mb-4 p-3 rounded-lg text-sm bg-red-900/40 border border-red-700 text-red-300';
         statusEl.textContent = '❌ ' + (data.error || 'Unknown error');
       }
     })
-    .catch(err => {
+    .catch(function(err) {
       statusEl.className = 'mb-4 p-3 rounded-lg text-sm bg-red-900/40 border border-red-700 text-red-300';
       statusEl.textContent = '❌ Request failed: ' + err.message;
     });
 });
 
-document.getElementById('btnConfigNext').addEventListener('click', () => showStep(4));
+var btnConfigNext = document.getElementById('btnConfigNext');
+if (btnConfigNext) btnConfigNext.addEventListener('click', function() { showStep(4); });
 
 // ---------------------------------------------------------------------------
 // Step 4 — Build
 // ---------------------------------------------------------------------------
-document.getElementById('btnBuild').addEventListener('click', function() {
-  const btn = this;
+var btnBuild = document.getElementById('btnBuild');
+if (btnBuild) btnBuild.addEventListener('click', function() {
+  var btn = this;
   btn.disabled = true;
-  btn.innerHTML = `<svg class="spinner h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg> Building...`;
+  btn.innerHTML = '<svg class="spinner h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg> Building...';
 
-  const outputWrap = document.getElementById('buildOutput');
-  const outputPre  = document.getElementById('buildOutputPre');
-  const spinner    = document.getElementById('buildSpinner');
-  const label      = document.getElementById('buildOutputLabel');
+  var outputWrap = document.getElementById('buildOutput');
+  var outputPre  = document.getElementById('buildOutputPre');
+  var spinner    = document.getElementById('buildSpinner');
+  var label      = document.getElementById('buildOutputLabel');
 
   outputWrap.classList.remove('hidden');
   spinner.classList.remove('hidden');
@@ -1218,17 +1227,17 @@ document.getElementById('btnBuild').addEventListener('click', function() {
   outputPre.textContent = '';
 
   fetch('?action=build', { method: 'POST' })
-    .then(r => r.json())
-    .then(data => {
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
       spinner.classList.add('hidden');
       label.textContent = 'Output:';
       outputPre.textContent = data.output || data.error || '(no output)';
       outputPre.scrollTop = outputPre.scrollHeight;
 
-      const statusEl = document.getElementById('buildStatus');
+      var statusEl = document.getElementById('buildStatus');
       statusEl.classList.remove('hidden');
 
-      const hasError = data.error || (data.output && data.output.toLowerCase().includes('error ts'));
+      var hasError = data.error || (data.output && data.output.toLowerCase().includes('error ts'));
       if (!hasError) {
         statusEl.className = 'mb-4 p-3 rounded-lg text-sm bg-green-900/40 border border-green-700 text-green-300';
         statusEl.textContent = '✅ Build completed successfully!';
@@ -1239,9 +1248,9 @@ document.getElementById('btnBuild').addEventListener('click', function() {
       }
 
       btn.disabled = false;
-      btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg> Re-run Build`;
+      btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg> Re-run Build';
     })
-    .catch(err => {
+    .catch(function(err) {
       spinner.classList.add('hidden');
       outputPre.textContent = 'Request failed: ' + err.message;
       btn.disabled = false;
@@ -1249,53 +1258,58 @@ document.getElementById('btnBuild').addEventListener('click', function() {
     });
 });
 
-document.getElementById('btnBuildNext').addEventListener('click', () => {
-  // Set admin panel link based on current host
-  const host = window.location.hostname;
-  document.getElementById('adminPanelLink').href = 'http://' + host + ':3000';
+var btnBuildNext = document.getElementById('btnBuildNext');
+if (btnBuildNext) btnBuildNext.addEventListener('click', function() {
+  var host = window.location.hostname;
+  var link = document.getElementById('adminPanelLink');
+  if (link) link.href = 'http://' + host + ':3000';
   showStep(5);
 });
 
 // ---------------------------------------------------------------------------
 // Step 5 — Launch
 // ---------------------------------------------------------------------------
-document.getElementById('btnStartPm2').addEventListener('click', function() {
-  const btn = this;
+var btnStartPm2 = document.getElementById('btnStartPm2');
+if (btnStartPm2) btnStartPm2.addEventListener('click', function() {
+  var btn = this;
   btn.disabled = true;
-  const spinner = document.getElementById('pm2Spinner');
-  spinner.classList.remove('hidden');
-  btn.querySelector('span') && (btn.querySelector('span').textContent = ' Starting...');
+  var spinner  = document.getElementById('pm2Spinner');
+  if (spinner) spinner.classList.remove('hidden');
 
-  const outputWrap = document.getElementById('pm2Output');
-  const outputPre  = document.getElementById('pm2OutputPre');
-  const statusEl   = document.getElementById('pm2Status');
+  var outputWrap = document.getElementById('pm2Output');
+  var outputPre  = document.getElementById('pm2OutputPre');
+  var statusEl   = document.getElementById('pm2Status');
 
-  outputWrap.classList.remove('hidden');
-  outputPre.textContent = '';
-  statusEl.classList.add('hidden');
+  if (outputWrap) outputWrap.classList.remove('hidden');
+  if (outputPre)  outputPre.textContent = '';
+  if (statusEl)   statusEl.classList.add('hidden');
 
   fetch('?action=start_pm2', { method: 'POST' })
-    .then(r => r.json())
-    .then(data => {
-      spinner.classList.add('hidden');
-      outputPre.textContent = data.output || data.error || '(no output)';
-      outputPre.scrollTop = outputPre.scrollHeight;
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (spinner) spinner.classList.add('hidden');
+      if (outputPre) {
+        outputPre.textContent = data.output || data.error || '(no output)';
+        outputPre.scrollTop = outputPre.scrollHeight;
+      }
 
-      statusEl.classList.remove('hidden');
-      if (data.error) {
-        statusEl.className = 'mb-4 p-3 rounded-lg text-sm bg-red-900/40 border border-red-700 text-red-300';
-        statusEl.textContent = '❌ ' + data.error;
-      } else {
-        statusEl.className = 'mb-4 p-3 rounded-lg text-sm bg-green-900/40 border border-green-700 text-green-300';
-        statusEl.textContent = '✅ SuperClaw started with PM2! Check your Telegram bot.';
+      if (statusEl) {
+        statusEl.classList.remove('hidden');
+        if (data.error) {
+          statusEl.className = 'mb-4 p-3 rounded-lg text-sm bg-red-900/40 border border-red-700 text-red-300';
+          statusEl.textContent = '❌ ' + data.error;
+        } else {
+          statusEl.className = 'mb-4 p-3 rounded-lg text-sm bg-green-900/40 border border-green-700 text-green-300';
+          statusEl.textContent = '✅ SuperClaw started with PM2! Check your Telegram bot.';
+        }
       }
 
       btn.disabled = false;
-      btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Restart PM2`;
+      btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Restart PM2';
     })
-    .catch(err => {
-      spinner.classList.add('hidden');
-      outputPre.textContent = 'Request failed: ' + err.message;
+    .catch(function(err) {
+      if (spinner) spinner.classList.add('hidden');
+      if (outputPre) outputPre.textContent = 'Request failed: ' + err.message;
       btn.disabled = false;
       btn.textContent = 'Retry';
     });
