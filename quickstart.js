@@ -4,7 +4,6 @@
 const { execSync, spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const os = require('os');
 
 const projectDir = __dirname;
 
@@ -58,8 +57,32 @@ if (!fs.existsSync(webServerDist)) {
   console.log('✅ Build already exists');
 }
 
-// ── Step 4: Get local IP for display ──────────────────────────────────────
-function getLocalIP() {
+// ── Step 4: Detect public IP (VPS-aware) ──────────────────────────────────
+async function getPublicIP() {
+  const https = require('https');
+
+  function fetchIP(url) {
+    return new Promise((resolve, reject) => {
+      const req = https.get(url, { timeout: 3000 }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => resolve(data.trim()));
+      });
+      req.on('error', reject);
+      req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+    });
+  }
+
+  // Try public IP services first (needed on VPS where os.networkInterfaces() returns private IP)
+  for (const url of ['https://api.ipify.org', 'https://ifconfig.me/ip', 'https://icanhazip.com']) {
+    try {
+      const ip = await fetchIP(url);
+      if (/^\d+\.\d+\.\d+\.\d+$/.test(ip)) return ip;
+    } catch { /* try next */ }
+  }
+
+  // Fallback to local network IP
+  const os = require('os');
   const interfaces = os.networkInterfaces();
   for (const name of Object.keys(interfaces)) {
     for (const iface of interfaces[name]) {
@@ -71,46 +94,61 @@ function getLocalIP() {
   return 'localhost';
 }
 
-const port = process.env.WEB_PORT || 3000;
-const ip = getLocalIP();
-
-console.log('\n🌐 Starting SuperClaw Web UI...\n');
-console.log('╔══════════════════════════════════════════════╗');
-console.log('║                                              ║');
-console.log(`║   👉  http://localhost:${port}               ║`);
-if (ip !== 'localhost') {
-  console.log(`║   👉  http://${ip}:${port}                  ║`);
-}
-console.log('║                                              ║');
-console.log('║   Open the URL above in your browser        ║');
-console.log('║   Press Ctrl+C to stop                      ║');
-console.log('║                                              ║');
-console.log('╚══════════════════════════════════════════════╝\n');
-
 // ── Step 5: Start the web server ───────────────────────────────────────────
-const child = spawn(
-  process.execPath,
-  [path.join(projectDir, 'dist', 'web', 'WebServer.js')],
-  {
-    stdio: 'inherit',
-    cwd: projectDir,
-    env: {
-      ...process.env,
-      WEB_ONLY: 'true',
-      WEB_PORT: String(port),
-    },
-  }
-);
+async function main() {
+  const port = process.env.WEB_PORT || 3000;
 
-child.on('error', (err) => {
-  console.error('❌ Failed to start web server:', err.message);
+  console.log('\n🌐 Starting SuperClaw Web UI...');
+  console.log('   (Detecting public IP...)\n');
+
+  const ip = await getPublicIP();
+
+  console.log('\n' + '='.repeat(60));
+  console.log('✅ SuperClaw Web Panel is ready!');
+  console.log('='.repeat(60));
+  console.log('\n🌐 Access from anywhere:');
+  console.log(`   http://${ip}:${port}`);
+  console.log('\n💻 Access locally (SSH tunnel):');
+  console.log(`   http://localhost:${port}`);
+  console.log('\n⚠️  If port ' + port + ' is blocked by firewall, run:');
+  console.log(`   ufw allow ${port}/tcp    # Ubuntu/Debian`);
+  console.log(`   firewall-cmd --add-port=${port}/tcp --permanent && firewall-cmd --reload  # CentOS`);
+  console.log('\n📋 aaPanel users — add a reverse proxy site:');
+  console.log('   1. aaPanel → Website → Add Site → Domain: superclaw.yourdomain.com');
+  console.log('   2. Site Settings → Reverse Proxy → Target: http://127.0.0.1:' + port);
+  console.log('   3. Access via: http://superclaw.yourdomain.com');
+  console.log('\nPress Ctrl+C to stop the web server.\n');
+  console.log('='.repeat(60) + '\n');
+
+  const child = spawn(
+    process.execPath,
+    [path.join(projectDir, 'dist', 'web', 'WebServer.js')],
+    {
+      stdio: 'inherit',
+      cwd: projectDir,
+      env: {
+        ...process.env,
+        WEB_ONLY: 'true',
+        WEB_PORT: String(port),
+      },
+    }
+  );
+
+  child.on('error', (err) => {
+    console.error('❌ Failed to start web server:', err.message);
+    process.exit(1);
+  });
+
+  child.on('exit', (code) => {
+    process.exit(code || 0);
+  });
+
+  // Forward signals to child
+  process.on('SIGINT', () => { child.kill('SIGINT'); });
+  process.on('SIGTERM', () => { child.kill('SIGTERM'); });
+}
+
+main().catch((err) => {
+  console.error('❌ Startup error:', err.message);
   process.exit(1);
 });
-
-child.on('exit', (code) => {
-  process.exit(code || 0);
-});
-
-// Forward signals to child
-process.on('SIGINT', () => { child.kill('SIGINT'); });
-process.on('SIGTERM', () => { child.kill('SIGTERM'); });

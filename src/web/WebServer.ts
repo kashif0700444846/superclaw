@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import * as http from 'http';
+import * as https from 'https';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
@@ -663,6 +664,32 @@ export function createWebApp(): express.Application {
     }
   });
 
+  // ── Nginx config generator (for aaPanel reverse proxy setup) ────────────────
+  app.get('/api/nginx-config', requireAuth, (req: Request, res: Response) => {
+    const port = parseInt(process.env['WEB_PORT'] || '3000', 10);
+    const nginxConfig = `server {
+    listen 80;
+    server_name superclaw.yourdomain.com;  # Change to your domain
+
+    location / {
+        proxy_pass http://127.0.0.1:${port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+
+        # SSE support (for live logs)
+        proxy_buffering off;
+        proxy_read_timeout 86400s;
+    }
+}`;
+    res.type('text/plain').send(nginxConfig);
+  });
+
   // ── Catch-all: serve index.html for SPA routing ─────────────────────────────
   app.get('*', (_req: Request, res: Response) => {
     const indexPath = path.join(PUBLIC_DIR, 'index.html');
@@ -676,6 +703,19 @@ export function createWebApp(): express.Application {
   return app;
 }
 
+// ─── Public IP helper ─────────────────────────────────────────────────────────
+async function fetchPublicIP(): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const req = https.get('https://api.ipify.org', { timeout: 3000 } as http.RequestOptions, (res) => {
+      let data = '';
+      res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+      res.on('end', () => resolve(data.trim()));
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+  });
+}
+
 // ─── Start server (standalone entry point) ────────────────────────────────────
 export async function startWebServer(port?: number): Promise<http.Server> {
   const app = createWebApp();
@@ -683,8 +723,19 @@ export async function startWebServer(port?: number): Promise<http.Server> {
 
   return new Promise((resolve, reject) => {
     const server = http.createServer(app);
-    server.listen(webPort, '0.0.0.0', () => {
+    server.listen(webPort, '0.0.0.0', async () => {
       log('info', `Web server listening on http://0.0.0.0:${webPort}`);
+
+      // Try to get public IP for display (useful on VPS)
+      try {
+        const publicIP = await fetchPublicIP();
+        log('info', `Web panel accessible at: http://${publicIP}:${webPort}`);
+        console.log(`\n🌐 SuperClaw Web Panel: http://${publicIP}:${webPort}\n`);
+      } catch {
+        log('info', `Web panel accessible at: http://localhost:${webPort}`);
+        console.log(`\n🌐 SuperClaw Web Panel: http://localhost:${webPort}\n`);
+      }
+
       resolve(server);
     });
     server.on('error', reject);

@@ -299,6 +299,9 @@
       <div class="sidebar-link" onclick="showSection('tools')" id="nav-tools">
         <span>🛠️</span> Quick Actions
       </div>
+      <div class="sidebar-link" onclick="showSection('nginx')" id="nav-nginx">
+        <span>🔀</span> Nginx/aaPanel
+      </div>
       <div class="mt-auto pt-4 border-t border-slate-700">
         <div class="text-xs text-slate-500 px-2">SuperClaw Admin</div>
       </div>
@@ -467,6 +470,84 @@
             <h3 class="font-semibold mb-2">Restart Agent</h3>
             <p class="text-sm text-slate-400 mb-3">Restart the SuperClaw agent process.</p>
             <button class="btn btn-success btn-sm" onclick="agentAction('restart')">🔄 Restart Now</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── NGINX / AAPANEL SECTION ──────────────────────────────────── -->
+      <div id="section-nginx" class="section fade-in">
+        <h2 class="text-xl font-bold mb-4">Nginx / aaPanel Setup</h2>
+
+        <div class="card mb-4">
+          <h3 class="font-semibold mb-2">Current Server Info</h3>
+          <div class="space-y-2 text-sm">
+            <div class="flex justify-between">
+              <span class="text-slate-400">Web Panel Port</span>
+              <span id="nginx-port" class="font-mono">3000</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-400">Internal Target URL</span>
+              <span id="nginx-target" class="font-mono text-indigo-400">http://127.0.0.1:3000</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card mb-4">
+          <h3 class="font-semibold mb-3">Nginx Reverse Proxy Config</h3>
+          <p class="text-sm text-slate-400 mb-3">
+            Use this config to expose SuperClaw via a domain/subdomain through aaPanel or any Nginx setup.
+            Replace <code class="bg-slate-900 px-1 rounded text-indigo-300">superclaw.yourdomain.com</code> with your actual domain.
+          </p>
+          <div class="relative">
+            <pre id="nginx-config-preview" class="bg-slate-900 rounded-lg p-4 text-xs text-slate-300 overflow-x-auto" style="min-height:200px">Loading...</pre>
+          </div>
+          <div class="flex gap-2 mt-3">
+            <button class="btn btn-primary btn-sm" onclick="copyNginxConfig()">📋 Copy Config</button>
+            <button class="btn btn-secondary btn-sm" onclick="loadNginxConfig()">↻ Reload</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="font-semibold mb-3">aaPanel Step-by-Step Guide</h3>
+          <ol class="space-y-4 text-sm">
+            <li class="flex gap-3">
+              <span class="flex-shrink-0 w-7 h-7 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold text-xs">1</span>
+              <div>
+                <div class="font-medium text-slate-200">Add a new website in aaPanel</div>
+                <div class="text-slate-400 mt-1">Go to <strong>aaPanel → Website → Add Site</strong>. Set the domain to your subdomain (e.g. <code class="bg-slate-900 px-1 rounded text-indigo-300">superclaw.yourdomain.com</code>). PHP version: <em>Pure Static</em>.</div>
+              </div>
+            </li>
+            <li class="flex gap-3">
+              <span class="flex-shrink-0 w-7 h-7 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold text-xs">2</span>
+              <div>
+                <div class="font-medium text-slate-200">Configure Reverse Proxy</div>
+                <div class="text-slate-400 mt-1">Click <strong>Settings</strong> on the site → <strong>Reverse Proxy</strong> tab → <strong>Add Reverse Proxy</strong>. Set target URL to <code class="bg-slate-900 px-1 rounded text-indigo-300" id="nginx-target-inline">http://127.0.0.1:3000</code>.</div>
+              </div>
+            </li>
+            <li class="flex gap-3">
+              <span class="flex-shrink-0 w-7 h-7 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold text-xs">3</span>
+              <div>
+                <div class="font-medium text-slate-200">Enable SSL (optional but recommended)</div>
+                <div class="text-slate-400 mt-1">In site settings → <strong>SSL</strong> tab → <strong>Let's Encrypt</strong> → apply free certificate. Then enable <strong>Force HTTPS</strong>.</div>
+              </div>
+            </li>
+            <li class="flex gap-3">
+              <span class="flex-shrink-0 w-7 h-7 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold text-xs">4</span>
+              <div>
+                <div class="font-medium text-slate-200">Add SSE / WebSocket headers (for live logs)</div>
+                <div class="text-slate-400 mt-1">If using the Nginx config above, the <code class="bg-slate-900 px-1 rounded text-indigo-300">proxy_buffering off</code> and <code class="bg-slate-900 px-1 rounded text-indigo-300">proxy_read_timeout 86400s</code> lines ensure the live log stream works correctly.</div>
+              </div>
+            </li>
+            <li class="flex gap-3">
+              <span class="flex-shrink-0 w-7 h-7 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold text-xs">5</span>
+              <div>
+                <div class="font-medium text-slate-200">Access via your domain</div>
+                <div class="text-slate-400 mt-1">Visit <code class="bg-slate-900 px-1 rounded text-indigo-300">http://superclaw.yourdomain.com</code> (or https:// after SSL). No port number needed!</div>
+              </div>
+            </li>
+          </ol>
+          <div class="mt-4 p-3 bg-yellow-900/30 border border-yellow-700/50 rounded-lg">
+            <p class="text-xs text-yellow-300">⚠️ <strong>Firewall note:</strong> Make sure port <span id="nginx-port-note">3000</span> is open on your VPS firewall so aaPanel's Nginx can reach it internally. Run: <code class="bg-slate-900 px-1 rounded">ufw allow <span id="nginx-port-ufw">3000</span>/tcp</code></p>
           </div>
         </div>
       </div>
@@ -922,6 +1003,7 @@ function showSection(name) {
   if (name === 'config') { loadConfig(); loadSuperclawConfig(); }
   if (name === 'admins') loadAdmins();
   if (name === 'logs') { /* user clicks start stream */ }
+  if (name === 'nginx') loadNginxSection();
 
   // Close mobile sidebar
   document.getElementById('sidebar').classList.remove('open');
@@ -1070,6 +1152,57 @@ function updateProviderUI() {
 function toggleWhatsApp() {
   const enabled = document.getElementById('s4-enabled').checked;
   document.getElementById('s4-options').classList.toggle('hidden', !enabled);
+}
+
+// ── Nginx / aaPanel section ────────────────────────────────────────────────
+async function loadNginxSection() {
+  // Update port display from config
+  const cfg = await api('GET', '/api/config');
+  const port = (cfg && cfg.config && cfg.config['WEB_PORT']) ? cfg.config['WEB_PORT'] : '3000';
+  document.getElementById('nginx-port').textContent = port;
+  document.getElementById('nginx-target').textContent = `http://127.0.0.1:${port}`;
+  document.getElementById('nginx-target-inline').textContent = `http://127.0.0.1:${port}`;
+  document.getElementById('nginx-port-note').textContent = port;
+  document.getElementById('nginx-port-ufw').textContent = port;
+  await loadNginxConfig();
+}
+
+async function loadNginxConfig() {
+  const pre = document.getElementById('nginx-config-preview');
+  pre.textContent = 'Loading...';
+  try {
+    const res = await fetch('/api/nginx-config', {
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+    });
+    if (res.status === 401) { navigate('login'); return; }
+    const text = await res.text();
+    pre.textContent = text;
+  } catch (err) {
+    pre.textContent = '// Error loading config: ' + err.message;
+  }
+}
+
+async function copyNginxConfig() {
+  const text = document.getElementById('nginx-config-preview').textContent;
+  if (!text || text === 'Loading...') {
+    toast('Config not loaded yet', 'error');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Nginx config copied to clipboard!', 'success');
+  } catch {
+    // Fallback for older browsers
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    toast('Nginx config copied to clipboard!', 'success');
+  }
 }
 
 // ── Start ──────────────────────────────────────────────────────────────────
