@@ -33,6 +33,11 @@ export class FunctionCaller {
       });
     } else if (config.aiProvider === 'anthropic' && config.anthropicApiKey) {
       this.anthropicClient = new Anthropic({ apiKey: config.anthropicApiKey });
+    } else if (config.aiProvider === 'custom' && config.customAiBaseUrl) {
+      this.openaiClient = new OpenAI({
+        apiKey: config.customAiApiKey || 'none',
+        baseURL: config.customAiBaseUrl,
+      });
     }
   }
 
@@ -87,6 +92,17 @@ export class FunctionCaller {
       );
     } else if (config.aiProvider === 'ollama') {
       return this.runOllamaLoop(systemPrompt, history, userMessage, toolsUsed);
+    } else if (config.aiProvider === 'custom') {
+      return this.runCustomLoop(
+        systemPrompt,
+        history,
+        userMessage,
+        platform,
+        chatId,
+        userId,
+        toolsUsed,
+        maxIterations
+      );
     }
 
     return { response: 'No AI provider configured.', toolsUsed: [] };
@@ -310,6 +326,99 @@ export class FunctionCaller {
       logger.error('Ollama request failed', { error });
       return { response: `Ollama error: ${error.message}`, toolsUsed: [] };
     }
+  }
+
+  private async runCustomLoop(
+    systemPrompt: string,
+    history: ConversationMessage[],
+    userMessage: string,
+    platform: Platform,
+    chatId: string,
+    userId: string,
+    toolsUsed: string[],
+    maxIterations: number
+  ): Promise<FunctionCallerResult> {
+    if (!this.openaiClient) {
+      return { response: 'Custom AI client not initialized. Check CUSTOM_AI_BASE_URL.', toolsUsed: [] };
+    }
+
+    const model = config.customAiModel || config.aiModel;
+
+    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+      { role: 'system', content: systemPrompt },
+      ...history.map((m): OpenAI.Chat.ChatCompletionMessageParam => {
+        if (m.role === 'tool') {
+          return {
+            role: 'tool',
+            tool_call_id: m.toolCallId || 'unknown',
+            content: m.content,
+          };
+        }
+        return { role: m.role as 'user' | 'assistant', content: m.content };
+      }),
+      { role: 'user', content: userMessage },
+    ];
+
+    const tools = toolRegistry.toOpenAiFunctions();
+
+    for (let i = 0; i < maxIterations; i++) {
+      logger.debug(`FunctionCaller Custom iteration ${i + 1}`);
+
+      const response = await this.openaiClient.chat.completions.create({
+        model,
+        messages,
+        tools,
+        tool_choice: 'auto',
+        max_tokens: 4096,
+      });
+
+      const choice = response.choices[0];
+      if (!choice) break;
+
+      const assistantMessage = choice.message;
+      messages.push(assistantMessage as OpenAI.Chat.ChatCompletionMessageParam);
+
+      if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
+        return {
+          response: assistantMessage.content || 'Task completed.',
+          toolsUsed,
+        };
+      }
+
+      for (const toolCall of assistantMessage.tool_calls) {
+        const toolName = toolCall.function.name;
+        const toolParams = JSON.parse(toolCall.function.arguments || '{}');
+
+        if (toolName === 'shell_execute') {
+          toolParams.platform = platform;
+          toolParams.chatId = chatId;
+          toolParams.userId = userId;
+        }
+
+        logger.info(`Executing tool (custom): ${toolName}`, { params: toolParams });
+        toolsUsed.push(toolName);
+
+        const tool = toolRegistry.getTool(toolName);
+        let toolResult: unknown;
+
+        if (!tool) {
+          toolResult = { success: false, error: `Tool not found: ${toolName}` };
+        } else {
+          toolResult = await tool.execute(toolParams);
+        }
+
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: JSON.stringify(toolResult),
+        });
+      }
+    }
+
+    return {
+      response: 'Maximum iterations reached. Task may be incomplete.',
+      toolsUsed,
+    };
   }
 }
 

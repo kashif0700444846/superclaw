@@ -16,12 +16,12 @@ function optionalEnv(key: string, defaultValue: string = ''): string {
   return process.env[key] || defaultValue;
 }
 
-function validateProvider(provider: string): 'openai' | 'anthropic' | 'groq' | 'ollama' {
-  const valid = ['openai', 'anthropic', 'groq', 'ollama'];
+function validateProvider(provider: string): 'openai' | 'anthropic' | 'groq' | 'ollama' | 'custom' {
+  const valid = ['openai', 'anthropic', 'groq', 'ollama', 'custom'];
   if (!valid.includes(provider)) {
     throw new Error(`Invalid AI_PROVIDER: ${provider}. Must be one of: ${valid.join(', ')}`);
   }
-  return provider as 'openai' | 'anthropic' | 'groq' | 'ollama';
+  return provider as 'openai' | 'anthropic' | 'groq' | 'ollama' | 'custom';
 }
 
 const provider = validateProvider(optionalEnv('AI_PROVIDER', 'openai'));
@@ -34,6 +34,9 @@ export const config: AgentConfig = {
   anthropicApiKey: optionalEnv('ANTHROPIC_API_KEY'),
   groqApiKey: optionalEnv('GROQ_API_KEY'),
   ollamaBaseUrl: optionalEnv('OLLAMA_BASE_URL', 'http://localhost:11434'),
+  customAiBaseUrl: optionalEnv('CUSTOM_AI_BASE_URL'),
+  customAiModel: optionalEnv('CUSTOM_AI_MODEL'),
+  customAiApiKey: optionalEnv('CUSTOM_AI_API_KEY'),
   telegramBotToken: optionalEnv('TELEGRAM_BOT_TOKEN', 'DISABLED'),
   adminTelegramId: optionalEnv('ADMIN_TELEGRAM_ID', '0'),
   whatsappSessionName: optionalEnv('WHATSAPP_SESSION_NAME', 'superclaw'),

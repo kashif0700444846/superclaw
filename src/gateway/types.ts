@@ -52,12 +52,15 @@ export interface ConversationMessage {
 
 export interface AgentConfig {
   agentName: string;
-  aiProvider: 'openai' | 'anthropic' | 'groq' | 'ollama';
+  aiProvider: 'openai' | 'anthropic' | 'groq' | 'ollama' | 'custom';
   aiModel: string;
   openaiApiKey?: string;
   anthropicApiKey?: string;
   groqApiKey?: string;
   ollamaBaseUrl?: string;
+  customAiBaseUrl?: string;
+  customAiModel?: string;
+  customAiApiKey?: string;
   /** Optional — only required when Telegram platform is enabled */
   telegramBotToken: string;
   /** Optional — only required when Telegram platform is enabled */

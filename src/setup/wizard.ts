@@ -2,6 +2,7 @@ import inquirer from 'inquirer';
 import chalk from 'chalk';
 import fs from 'fs';
 import path from 'path';
+import OpenAI from 'openai';
 import { SuperclawConfig } from '../types/SuperclawConfig';
 
 const ENV_PATH = path.resolve(process.cwd(), '.env');
@@ -68,7 +69,27 @@ function getDefaultModel(provider: string): string {
     case 'anthropic': return 'claude-3-5-sonnet-20241022';
     case 'groq': return 'llama-3.3-70b-versatile';
     case 'ollama': return 'llama3';
+    case 'custom': return 'mistral-7b-instruct';
     default: return 'gpt-4o';
+  }
+}
+
+async function testCustomConnection(
+  baseURL: string,
+  model: string,
+  apiKey: string
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const client = new OpenAI({ baseURL, apiKey: apiKey || 'none' });
+    await client.chat.completions.create({
+      model,
+      messages: [{ role: 'user', content: 'Say "ok"' }],
+      max_tokens: 5,
+    });
+    return { ok: true };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: message };
   }
 }
 
@@ -165,6 +186,7 @@ async function runWizard(): Promise<void> {
         { name: 'Anthropic (Claude 3.5 Sonnet)', value: 'anthropic' },
         { name: 'Groq (Llama 3 — fast & free tier)', value: 'groq' },
         { name: 'Ollama (local models)', value: 'ollama' },
+        { name: 'Custom (OpenAI-compatible)', value: 'custom' },
       ],
       default: 'openai',
     },
@@ -210,6 +232,113 @@ async function runWizard(): Promise<void> {
       when: () => aiProvider === 'ollama',
     },
   ]);
+
+  // ── Custom provider: collect details + test connection ──
+  let customAiBaseUrl = '';
+  let customAiModel = aiModel;
+  let customAiApiKey = '';
+
+  if (aiProvider === 'custom') {
+    console.log(chalk.bold.cyan('\n🔌 Custom Provider Setup\n'));
+    console.log(chalk.gray('Enter the details for your OpenAI-compatible endpoint.\n'));
+
+    const customDetails = await inquirer.prompt<{
+      customBaseUrl: string;
+      customModel: string;
+      customApiKey: string;
+    }>([
+      {
+        type: 'input',
+        name: 'customBaseUrl',
+        message: 'Base URL (e.g. https://api.openrouter.ai/v1 or http://localhost:11434/v1):',
+        default: 'https://api.openrouter.ai/v1',
+        validate: (val: string) => val.startsWith('http') ? true : 'Must be a valid URL starting with http',
+      },
+      {
+        type: 'input',
+        name: 'customModel',
+        message: 'Model name (e.g. mistral-7b, gpt-4o, llama3):',
+        default: aiModel,
+        validate: (val: string) => val.trim().length > 0 ? true : 'Model name cannot be empty',
+      },
+      {
+        type: 'password',
+        name: 'customApiKey',
+        message: 'API Key (leave empty for local/no-auth models):',
+        default: '',
+      },
+    ]);
+
+    customAiBaseUrl = customDetails.customBaseUrl;
+    customAiModel = customDetails.customModel;
+    customAiApiKey = customDetails.customApiKey;
+
+    // Test connection with retry loop
+    let connectionOk = false;
+    while (!connectionOk) {
+      console.log(chalk.gray('\n  Testing connection…'));
+      const result = await testCustomConnection(customAiBaseUrl, customAiModel, customAiApiKey);
+
+      if (result.ok) {
+        console.log(chalk.green('  ✅ Connection successful!'));
+        connectionOk = true;
+      } else {
+        console.log(chalk.red(`  ❌ Connection failed: ${result.error}`));
+        const { retryAction } = await inquirer.prompt<{ retryAction: 'retry' | 'skip' }>([
+          {
+            type: 'list',
+            name: 'retryAction',
+            message: 'What would you like to do?',
+            choices: [
+              { name: 'Retry with different settings', value: 'retry' },
+              { name: 'Skip test and continue anyway', value: 'skip' },
+            ],
+          },
+        ]);
+
+        if (retryAction === 'skip') {
+          console.log(chalk.yellow('  ⚠️  Skipping connection test. Make sure your settings are correct.'));
+          connectionOk = true;
+        } else {
+          // Re-prompt for custom details
+          const retryDetails = await inquirer.prompt<{
+            customBaseUrl: string;
+            customModel: string;
+            customApiKey: string;
+          }>([
+            {
+              type: 'input',
+              name: 'customBaseUrl',
+              message: 'Base URL:',
+              default: customAiBaseUrl,
+              validate: (val: string) => val.startsWith('http') ? true : 'Must be a valid URL starting with http',
+            },
+            {
+              type: 'input',
+              name: 'customModel',
+              message: 'Model name:',
+              default: customAiModel,
+              validate: (val: string) => val.trim().length > 0 ? true : 'Model name cannot be empty',
+            },
+            {
+              type: 'password',
+              name: 'customApiKey',
+              message: 'API Key (leave empty for local/no-auth models):',
+              default: '',
+            },
+          ]);
+          customAiBaseUrl = retryDetails.customBaseUrl;
+          customAiModel = retryDetails.customModel;
+          customAiApiKey = retryDetails.customApiKey;
+        }
+      }
+    }
+
+    // Store custom values back into apiAnswers for buildEnvContent
+    apiAnswers.customAiBaseUrl = customAiBaseUrl;
+    apiAnswers.customAiModel = customAiModel;
+    apiAnswers.customAiApiKey = customAiApiKey;
+  }
 
   // ── STEP 5: Platform Credentials ───────────────────────
   console.log(chalk.bold.cyan('\n🔑 STEP 5: Platform Credentials\n'));
@@ -350,10 +479,11 @@ async function runWizard(): Promise<void> {
   console.log(chalk.green('\n✅ .env written'));
 
   // Write superclaw.config.json
-  const superclawConfig: SuperclawConfig = {
+  const superclawConfig: SuperclawConfig & { aiProvider: string } = {
     schemaVersion: 1,
     platforms: platforms as Array<'telegram' | 'whatsapp'>,
     whatsappDriver,
+    aiProvider,
     enabledTools,
     disabledTools,
     estimatedRamMb: estimatedRam,
@@ -397,6 +527,11 @@ function buildEnvContent(answers: any, platforms: string[]): string {
     `ANTHROPIC_API_KEY=${answers.anthropicApiKey || ''}`,
     `GROQ_API_KEY=${answers.groqApiKey || ''}`,
     `OLLAMA_BASE_URL=${answers.ollamaBaseUrl || 'http://localhost:11434'}`,
+    '',
+    '# Custom OpenAI-compatible provider (used when AI_PROVIDER=custom)',
+    `CUSTOM_AI_BASE_URL=${answers.customAiBaseUrl || ''}`,
+    `CUSTOM_AI_MODEL=${answers.customAiModel || ''}`,
+    `CUSTOM_AI_API_KEY=${answers.customAiApiKey || ''}`,
     '',
     '# Telegram',
     `TELEGRAM_BOT_TOKEN=${answers.telegramBotToken || 'DISABLED'}`,

@@ -1,307 +1,143 @@
-# 🦞 SuperClaw — Lightweight Autonomous AI Agent
+# SuperClaw
 
-SuperClaw is a **modular, memory-efficient** autonomous AI agent that runs on a Linux Ubuntu VPS and is controlled via Telegram and/or WhatsApp. It delivers the same capabilities as OpenClaw-style agents at a **fraction of the memory footprint**.
+**A lightweight, self-hosted AI agent that lives on your VPS and does things for you.**
+
+[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/kashif0700444846/superclaw/releases)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](https://nodejs.org)
+
+---
+
+## What is SuperClaw?
+
+SuperClaw is a personal AI agent you deploy on your own server. Once it's running, you can talk to it through Telegram or WhatsApp and ask it to do real things — run shell commands, manage files, search the web, install packages, execute code, and more. It's not a chatbot that just answers questions; it actually *does stuff*.
+
+Under the hood, SuperClaw connects to whichever AI provider you prefer — OpenAI, Anthropic, Groq, Ollama, or any OpenAI-compatible API like OpenRouter or LM Studio. You're not locked into anything. Swap providers anytime by editing a config file.
+
+The whole thing is modular. During setup, a wizard walks you through which platforms and tools you want to enable. Don't need WhatsApp? Skip it. Don't want web search? Leave it out. You end up with exactly what you need and nothing you don't.
+
+---
 
 ## Why SuperClaw?
 
-| | SuperClaw Ultra-Lite | SuperClaw Standard | SuperClaw Full | OpenClaw (typical) |
-|--|--|--|--|--|
-| **RAM** | ~110 MB | ~150 MB | ~600 MB | ~600–1000 MB |
-| **Storage** | ~500 MB | ~600 MB | ~1.5 GB | ~1.5–2 GB |
-| **Platforms** | Telegram | Telegram + WhatsApp | Telegram + WhatsApp | Telegram + WhatsApp |
-| **WhatsApp Driver** | — | Baileys (WebSocket) | Puppeteer (Chromium) | Puppeteer (Chromium) |
-| **Chromium required** | ❌ No | ❌ No | ✅ Yes | ✅ Yes |
-| **Min VPS** | $4/mo (1 GB) | $4/mo (1 GB) | $6/mo (2 GB) | $6–12/mo (2–4 GB) |
+Most self-hosted AI agent projects are either too heavy (Chromium-based, 500+ MB RAM, need a real database) or too bare-bones to actually be useful. SuperClaw sits in the middle.
 
-**SuperClaw Standard uses ~75% less RAM than a typical OpenClaw setup.**
+- **No Chromium required** — WhatsApp support uses [Baileys](https://github.com/WhiskeySockets/Baileys), a WebSocket-based library. No headless browser, no bloat.
+- **Runs on a $5 VPS** — typical RAM usage is 80–120 MB depending on your config.
+- **SQLite for storage** — conversation history and memory are stored locally. No separate database server to manage.
+- **Simple to update** — one command and you're on the latest version.
 
-## Features
+---
 
-- 🤖 **AI-Powered**: OpenAI GPT-4o, Anthropic Claude, Groq (free tier), or local Ollama
-- 📱 **Dual Platform**: Telegram and/or WhatsApp (your choice)
-- ⚡ **Lightweight WhatsApp**: Baileys driver uses WebSocket directly — no Chromium browser
-- 🔧 **15 Built-in Tools**: Shell, file management, HTTP, packages, systemd, cron, processes, and more
-- 🧠 **Persistent Memory**: Long-term memory via Markdown files, conversation history via SQLite
-- 🔒 **Secure**: Admin-only access, destructive command confirmation, rate limiting
-- 🚀 **Always-On**: PM2 process manager with auto-restart
-- 🧩 **Modular**: Only load what you need — disable unused platforms and tools
+## Quick Install
 
-## Quick Start
-
-### Prerequisites
-- Ubuntu 22.04 LTS VPS
-- A Telegram bot token (from [@BotFather](https://t.me/BotFather))
-- Your Telegram user ID (from [@userinfobot](https://t.me/userinfobot))
-- An AI API key (OpenAI, Anthropic, Groq) or local Ollama
-
-### One-Command Install
+The fastest way to get started is the one-liner:
 
 ```bash
-git clone https://github.com/yourusername/superclaw.git ~/superclaw
-cd ~/superclaw
-bash install.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/kashif0700444846/superclaw/main/install.sh)
 ```
 
-The installer will ask you to choose a mode:
+This script will:
+1. Check for Node.js (>=20) and install it if it's missing
+2. Clone the SuperClaw repo to `/www/wwwroot/superclaw`
+3. Run `pnpm install` to pull in dependencies
+4. Launch the interactive setup wizard
 
-```
-Available modes:
+The wizard asks you a few questions — which AI provider to use, which platforms to enable, your API keys — and generates a `superclaw.config.json` for you. Then it starts the agent with PM2.
 
-  1) Ultra-Lite  — Telegram only
-     RAM: ~110 MB | Storage: ~500 MB | No Chromium
-
-  2) Standard    — Telegram + WhatsApp (Baileys, no Chromium)
-     RAM: ~150 MB | Storage: ~600 MB | Recommended
-
-  3) Full        — Telegram + WhatsApp (Puppeteer/Chromium)
-     RAM: ~600 MB | Storage: ~1.5 GB | Maximum compatibility
-
-  Comparison: OpenClaw typically uses ~600 MB+ RAM
-```
-
-### Manual Setup
+### Prefer to do it manually?
 
 ```bash
-# Install dependencies (lite — no Chromium)
-pnpm install --no-optional
-
-# Or full install (includes Puppeteer/Chromium)
+git clone https://github.com/kashif0700444846/superclaw.git
+cd superclaw
 pnpm install
-
-# Run setup wizard (choose platforms, see RAM estimates)
 npx tsx src/setup/wizard.ts
-
-# Build and start
-pnpm build
-pm2 start ecosystem.config.js
 ```
 
-## Setup Wizard
+Same result, just more hands-on.
 
-The interactive wizard guides you through configuration and shows real-time memory estimates:
+---
 
-```
-📱 STEP 1: Choose Platforms
-
-  Telegram only:              ~110 MB
-  WhatsApp only (Baileys):    ~120 MB
-  Both (Baileys):             ~150 MB  ← Recommended
-  Both (Puppeteer):           ~560 MB
-
-⚙️  STEP 2: WhatsApp Driver
-
-  Baileys   ✓ Recommended — ~40 MB, no Chromium
-  Puppeteer ⚠ Heavy — ~450 MB, requires Chromium
-
-📊 STEP 7: Configuration Summary
-
-  Platforms:    telegram, whatsapp
-  WA Driver:    Baileys (lightweight)
-  AI Provider:  openai / gpt-4o
-  Tools:        13 enabled
-
-  Memory Footprint:
-  [████████░░░░░░░░░░░░] ~150 MB RAM
-
-  ✓ 450 MB lighter than a typical OpenClaw setup (~600 MB)
-  ✓ 75% less RAM usage
-```
-
-## Configuration
-
-All settings are stored in two files:
-- `.env` — API keys and credentials
-- `superclaw.config.json` — platform/tool selection (written by wizard)
-
-### `superclaw.config.json` example
-
-```json
-{
-  "schemaVersion": 1,
-  "platforms": ["telegram", "whatsapp"],
-  "whatsappDriver": "baileys",
-  "enabledTools": ["shell_execute", "file_read", "file_write", "file_list",
-    "http_request", "package_manager", "service_manager", "cron_manager",
-    "process_manager", "system_info", "memory_read", "memory_write", "ai_query"],
-  "disabledTools": ["web_search", "code_executor"],
-  "estimatedRamMb": 150,
-  "generatedAt": "2026-01-01T00:00:00.000Z"
-}
-```
-
-### Key `.env` Variables
-
-| Variable | Description |
-|----------|-------------|
-| `AI_PROVIDER` | `openai` \| `anthropic` \| `groq` \| `ollama` |
-| `AI_MODEL` | e.g. `gpt-4o`, `claude-3-5-sonnet-20241022`, `llama-3.3-70b-versatile` |
-| `TELEGRAM_BOT_TOKEN` | From @BotFather |
-| `ADMIN_TELEGRAM_ID` | Your Telegram user ID |
-| `ADMIN_WHATSAPP_NUMBER` | Baileys: `15551234567@s.whatsapp.net` / Puppeteer: `15551234567@c.us` |
-| `AGENT_NAME` | Display name (default: SuperClaw) |
-
-## Usage
-
-### Telegram Commands
-
-| Command | Description |
-|---------|-------------|
-| `/start` | Agent status |
-| `/help` | List all commands |
-| `/memory` | Show long-term memory |
-| `/logs` | Today's activity log |
-| `/status` | VPS system info |
-
-### Direct Commands (both platforms)
-
-| Command | Description |
-|---------|-------------|
-| `!shell <cmd>` | Execute shell command |
-| `!remember <fact>` | Save to long-term memory |
-| `!ask <question>` | Ask AI directly |
-| `!read <path>` | Read a file |
-| `!status` | System information |
-
-### Natural Language
-
-```
-"install nginx and configure it for example.com"
-"show disk usage"
-"restart the postgresql service"
-"set up a cron job to backup /var/www every night at 2am"
-"what processes are using the most CPU?"
-```
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────┐
-│                    GATEWAY LAYER                     │
-│  Normalizes messages • Routes to Brain               │
-│  Rate limiting • Confirmation handling               │
-├──────────────────┬──────────────────────────────────┤
-│  TELEGRAM        │  WHATSAPP                        │
-│  (grammy)        │  Baileys ← lightweight           │
-│  ~30 MB          │  ~40 MB  (no Chromium)           │
-│                  │  — or —                          │
-│                  │  Puppeteer (Chromium) ~450 MB    │
-└──────────────────┴──────────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────┐
-│                    BRAIN LAYER                       │
-│  PromptBuilder → FunctionCaller → Tool Loop          │
-│  OpenAI / Anthropic / Groq / Ollama                  │
-└────────────────────────┬────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────┐
-│              TOOL LAYER (up to 15 tools)             │
-│  Core: shell • file • http • packages • services     │
-│  Core: cron • processes • system • memory • ai_query │
-│  Optional: web_search • code_executor                │
-└────────────────────────┬────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────┐
-│                   MEMORY LAYER                       │
-│  SOUL.md • MEMORY.md • Daily logs • SQLite           │
-└─────────────────────────────────────────────────────┘
-```
-
-## File Structure
-
-```
-superclaw/
-├── src/
-│   ├── index.ts                    # Entry point (conditional platform loading)
-│   ├── config.ts                   # Environment config
-│   ├── logger.ts                   # Winston logger
-│   ├── superclawConfig.ts          # superclaw.config.json loader
-│   ├── types/
-│   │   └── SuperclawConfig.ts      # Config TypeScript interface
-│   ├── gateway/
-│   │   ├── Gateway.ts              # Message router
-│   │   └── types.ts                # Shared types
-│   ├── brain/
-│   │   ├── Brain.ts                # Decision engine
-│   │   ├── PromptBuilder.ts        # Dynamic system prompt
-│   │   ├── ToolRegistry.ts         # Conditional tool loading
-│   │   └── FunctionCaller.ts       # AI function-calling loop
-│   ├── memory/
-│   │   ├── MemoryManager.ts        # File-based memory
-│   │   └── ConversationDB.ts       # SQLite history
-│   ├── platforms/
-│   │   ├── TelegramPlatform.ts     # Telegram (grammy)
-│   │   ├── WhatsAppBaileysPlatform.ts  # WhatsApp lightweight ⚡
-│   │   └── WhatsAppPlatform.ts     # WhatsApp Puppeteer (legacy)
-│   ├── tools/                      # 15 tool modules
-│   └── setup/
-│       └── wizard.ts               # Interactive setup CLI
-├── memory/
-│   ├── SOUL.md                     # Agent identity
-│   ├── MEMORY.md                   # Long-term memory
-│   └── logs/                       # Daily logs
-├── superclaw.config.json           # Platform/tool config (written by wizard)
-├── .env                            # Credentials (gitignored)
-├── ecosystem.config.js             # PM2 config
-└── install.sh                      # Ubuntu install script
-```
-
-## Security
-
-- **Admin-only**: Only your configured Telegram ID and WhatsApp number can send commands
-- **Destructive protection**: `rm -rf`, `shutdown`, `DROP TABLE` etc. require Yes/No confirmation
-- **Rate limiting**: 30 messages/min, 10 AI calls/min
-- **Protected paths**: `.env` and source code are never readable by the agent
-
-## PM2 Management
+## Updating SuperClaw
 
 ```bash
-pm2 status              # Check status
-pm2 logs superclaw      # Live logs
-pm2 restart superclaw   # Restart
-pm2 stop superclaw      # Stop
+cd /www/wwwroot/superclaw && git pull && pnpm install && pm2 restart superclaw
 ```
 
-## Troubleshooting
+That's it. Every release bumps the version number, so you can always check `package.json` or the changelog below to see what changed.
 
-### WhatsApp QR Code (first run)
-```bash
-pm2 logs superclaw --lines 100
-```
-Scan with WhatsApp → Linked Devices → Link a Device.
+---
 
-### WhatsApp Session Expired
-```bash
-# Baileys
-rm -rf whatsapp-session-baileys/
-# Puppeteer
-rm -rf whatsapp-session/
-pm2 restart superclaw
-```
+## Supported AI Providers
 
-### Reconfigure platforms/tools
-```bash
-rm .env superclaw.config.json
-npx tsx src/setup/wizard.ts
-pnpm build && pm2 restart superclaw
-```
+| Provider | Notes |
+|---|---|
+| OpenAI | GPT-4o, GPT-4-turbo, and other OpenAI models |
+| Anthropic | Claude 3.5 Sonnet, Haiku, and the rest of the Claude family |
+| Groq | Very fast inference, has a free tier |
+| Ollama | Run open-source models locally on your VPS |
+| Custom | Any OpenAI-compatible API — OpenRouter, LM Studio, etc. |
 
-### Switch from Puppeteer to Baileys (save ~400 MB RAM)
-```bash
-rm superclaw.config.json
-npx tsx src/setup/wizard.ts   # choose Baileys this time
-pnpm build && pm2 restart superclaw
-```
+---
 
-## Updating
+## What Can It Do?
 
-```bash
-cd ~/superclaw
-git pull
-pnpm install --no-optional   # or pnpm install for full
-pnpm build
-pm2 restart superclaw
-```
+SuperClaw ships with 15 built-in tools, organized into a few categories:
+
+**Shell & System**
+Run arbitrary shell commands, manage background processes, set up cron jobs, start/stop system services, and pull system info (CPU, memory, disk, etc.).
+
+**Files**
+Read files, write files, list directory contents. Useful for having the agent inspect logs, edit config files, or generate output directly on the server.
+
+**Web**
+Make HTTP requests to external APIs and search the web. Good for fetching data, checking URLs, or pulling in information from the internet.
+
+**AI**
+Query any configured AI provider from within a task. The agent can delegate sub-tasks to a different model if needed, and it can execute code in a sandboxed environment.
+
+**Memory**
+Read and write to long-term memory. SuperClaw can remember things across conversations — preferences, notes, context — and refer back to them later.
+
+**Package Management**
+Install and manage packages via `apt`, `npm`, or `pip` directly from a chat message.
+
+---
+
+## Memory & RAM Usage
+
+| Config | Approx. RAM |
+|---|---|
+| Telegram only | ~80 MB |
+| WhatsApp (Baileys) only | ~100 MB |
+| Both platforms | ~120 MB |
+| With Puppeteer WhatsApp | ~500 MB |
+
+The Puppeteer-based WhatsApp option is still available if you need it, but Baileys is the default and recommended choice for low-resource setups.
+
+---
+
+## Changelog
+
+### v2.1.0 (2026-02-27)
+- Added Custom OpenAI-compatible API provider support (OpenRouter, LM Studio, etc.)
+- Custom provider connection test during setup wizard
+- Fixed esbuild Linux binary issue (no more `--no-optional` needed)
+- Added `.npmrc` to skip Chromium download automatically
+- Version bumping on every release going forward
+
+### v2.0.0
+- Complete rewrite with modular architecture
+- Replaced whatsapp-web.js (Puppeteer) with Baileys (WebSocket, no Chromium)
+- Interactive setup wizard with live RAM estimates
+- `superclaw.config.json` for runtime platform/tool selection
+- Three install modes: Ultra-Lite, Standard, Full
+
+### v1.0.0
+- Initial release
+
+---
 
 ## License
 
-MIT
+[MIT](LICENSE) — do whatever you want with it.
