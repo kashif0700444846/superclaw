@@ -55,6 +55,15 @@ export class FileReadTool implements Tool {
         return { success: false, error: `Path is a directory, not a file: ${resolved}` };
       }
 
+      // Guard: base64 encoding of large files causes context window overflow
+      const fileSizeKB = stats.size / 1024;
+      if (encoding === 'base64' && fileSizeKB > 500) {
+        return {
+          success: false,
+          error: `File is too large (${Math.round(fileSizeKB)}KB) to read as base64. Maximum size for base64 encoding is 500KB. For images, consider using a tool that can process images directly, or resize the image first.`,
+        };
+      }
+
       const content = fs.readFileSync(resolved, encoding);
       logger.debug(`FileReadTool read: ${resolved} (${stats.size} bytes)`);
 

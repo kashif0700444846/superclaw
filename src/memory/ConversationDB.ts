@@ -16,6 +16,22 @@ interface DbRow {
   timestamp: string;
 }
 
+const MAX_MESSAGE_CONTENT_LENGTH = 100_000; // 100KB per message in DB
+
+/**
+ * Truncate message content before storing in SQLite to prevent DB bloat
+ * from oversized tool results (e.g. base64 images, large shell output).
+ */
+function truncateForStorage(content: string): string {
+  if (content.length > MAX_MESSAGE_CONTENT_LENGTH) {
+    return (
+      content.substring(0, MAX_MESSAGE_CONTENT_LENGTH) +
+      '\n[... content truncated for storage ...]'
+    );
+  }
+  return content;
+}
+
 export class ConversationDB {
   private db!: DbAdapter;
   private readonly maxMessages = 50;
@@ -85,7 +101,7 @@ export class ConversationDB {
         userId,
         platform,
         message.role,
-        message.content,
+        truncateForStorage(message.content),
         message.toolCallId ?? null,
         message.toolName ?? null,
         new Date().toISOString()

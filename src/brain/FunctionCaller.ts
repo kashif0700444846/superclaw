@@ -23,6 +23,61 @@ export interface FunctionCallerResult {
 
 const MAX_ITERATIONS = 10;
 
+// ---------------------------------------------------------------------------
+// Context-window overflow prevention
+// ---------------------------------------------------------------------------
+
+const MAX_TOOL_RESULT_CHARS = 50_000; // ~12,500 tokens
+
+/**
+ * Sanitize a tool result before adding it to the messages array.
+ * Detects base64 blobs and oversized payloads and replaces them with a
+ * human-readable placeholder so the context window is never blown out.
+ */
+function sanitizeToolResult(result: unknown, toolName: string): string {
+  const str = typeof result === 'string' ? result : JSON.stringify(result);
+
+  // Special handling for base64 data (e.g. file_read with encoding:"base64")
+  if (str.includes('base64') || toolName === 'file_read') {
+    const base64Pattern = /[A-Za-z0-9+/]{1000,}={0,2}/;
+    if (base64Pattern.test(str)) {
+      const sizeKB = Math.round(str.length / 1024);
+      return `[Binary/base64 data truncated: ${sizeKB}KB. The file was read successfully but the raw binary content cannot be stored in conversation history. Use a different approach to process this file, such as saving it to a specific path and referencing it by path.]`;
+    }
+  }
+
+  if (str.length > MAX_TOOL_RESULT_CHARS) {
+    const truncated = str.substring(0, MAX_TOOL_RESULT_CHARS);
+    const remaining = str.length - MAX_TOOL_RESULT_CHARS;
+    return truncated + `\n\n[... TRUNCATED: ${remaining} more characters omitted to fit context window ...]`;
+  }
+
+  return str;
+}
+
+const MAX_CONTEXT_TOKENS = 150_000; // Leave ~50k headroom for response + tools
+
+function estimateTokens(messages: unknown[]): number {
+  return Math.ceil(JSON.stringify(messages).length / 4);
+}
+
+/**
+ * Trim the messages array so the estimated token count stays under
+ * MAX_CONTEXT_TOKENS (accounting for the system prompt separately).
+ * Always keeps at least the last 2 messages so the AI has context.
+ */
+function trimMessagesToFitContext(messages: unknown[], systemPrompt: string): unknown[] {
+  const systemTokens = Math.ceil(systemPrompt.length / 4);
+  const availableTokens = MAX_CONTEXT_TOKENS - systemTokens;
+
+  let trimmed = [...messages];
+  while (estimateTokens(trimmed) > availableTokens && trimmed.length > 2) {
+    trimmed.splice(0, 1);
+  }
+
+  return trimmed;
+}
+
 // Inline types for the old Anthropic SDK (0.17.x) which lacks tool-use support
 interface AnthropicMessageParam {
   role: 'user' | 'assistant';
@@ -294,8 +349,7 @@ export class FunctionCaller {
       };
     }
 
-    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-      { role: 'system', content: systemPrompt },
+    let messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       ...history.map((m): OpenAI.Chat.ChatCompletionMessageParam => {
         if (m.role === 'tool') {
           return {
@@ -317,20 +371,27 @@ export class FunctionCaller {
     for (let i = 0; i < maxIterations; i++) {
       logger.info(`FunctionCaller OpenAI iteration ${i + 1}/${maxIterations}`);
 
+      // Trim messages to fit context window before each API call
+      const trimmedMessages = trimMessagesToFitContext(messages, systemPrompt) as OpenAI.Chat.ChatCompletionMessageParam[];
+      if (trimmedMessages.length < messages.length) {
+        logger.warn(`FunctionCaller OpenAI: context trimmed — removed ${messages.length - trimmedMessages.length} messages to fit token limit`);
+        messages = trimmedMessages;
+      }
+
       const primaryClient = this.openaiClient;
       const primaryModel = config.aiModel;
 
       const response = await withRetryAndFailover(
         () => primaryClient.chat.completions.create({
           model: primaryModel,
-          messages,
+          messages: [{ role: 'system', content: systemPrompt }, ...messages],
           tools,
           tool_choice: 'auto',
           max_tokens: 4096,
         }),
         (fb, fbClient) => fbClient.chat.completions.create({
           model: fb.model,
-          messages,
+          messages: [{ role: 'system', content: systemPrompt }, ...messages],
           tools,
           tool_choice: 'auto',
           max_tokens: 4096,
@@ -402,7 +463,7 @@ export class FunctionCaller {
         messages.push({
           role: 'tool',
           tool_call_id: toolCall.id,
-          content: JSON.stringify(toolResult),
+          content: sanitizeToolResult(toolResult, toolName),
         });
       }
     }
@@ -567,7 +628,7 @@ export class FunctionCaller {
         };
       }
 
-      const toolResultStr = JSON.stringify(toolResult);
+      const toolResultStr = sanitizeToolResult(toolResult, toolName);
 
       // Append assistant turn and tool result as user turn
       conversationHistory.push({ role: 'assistant', content: assistantText });
@@ -660,8 +721,7 @@ export class FunctionCaller {
 
     const model = config.customAiModel || config.aiModel;
 
-    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-      { role: 'system', content: systemPrompt },
+    let messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       ...history.map((m): OpenAI.Chat.ChatCompletionMessageParam => {
         if (m.role === 'tool') {
           return {
@@ -684,17 +744,24 @@ export class FunctionCaller {
     for (let i = 0; i < maxIterations; i++) {
       logger.info(`FunctionCaller Custom iteration ${i + 1}/${maxIterations}`);
 
+      // Trim messages to fit context window before each API call
+      const trimmedMessages = trimMessagesToFitContext(messages, systemPrompt) as OpenAI.Chat.ChatCompletionMessageParam[];
+      if (trimmedMessages.length < messages.length) {
+        logger.warn(`FunctionCaller Custom: context trimmed — removed ${messages.length - trimmedMessages.length} messages to fit token limit`);
+        messages = trimmedMessages;
+      }
+
       const response = await withRetryAndFailover(
         () => primaryClient.chat.completions.create({
           model,
-          messages,
+          messages: [{ role: 'system', content: systemPrompt }, ...messages],
           tools,
           tool_choice: 'auto',
           max_tokens: 4096,
         }),
         (fb, fbClient) => fbClient.chat.completions.create({
           model: fb.model,
-          messages,
+          messages: [{ role: 'system', content: systemPrompt }, ...messages],
           tools,
           tool_choice: 'auto',
           max_tokens: 4096,
@@ -764,7 +831,7 @@ export class FunctionCaller {
         messages.push({
           role: 'tool',
           tool_call_id: toolCall.id,
-          content: JSON.stringify(toolResult),
+          content: sanitizeToolResult(toolResult, toolName),
         });
       }
     }
