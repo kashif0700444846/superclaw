@@ -115,6 +115,9 @@ export const config: AgentConfig = {
   fallbackModels: buildFallbackModels(),
   aiMaxRetries: parseInt(optionalEnv('AI_MAX_RETRIES', '3')),
   aiRetryDelayMs: parseInt(optionalEnv('AI_RETRY_DELAY_MS', '1000')),
+  // Web admin panel
+  webEnabled: optionalEnv('WEB_ENABLED', 'false') === 'true',
+  webPort: parseInt(optionalEnv('WEB_PORT', '3000')),
 };
 
 export default config;

@@ -94,4 +94,8 @@ export interface AgentConfig {
   aiMaxRetries: number;
   /** Base delay in ms for exponential backoff (default: 1000) */
   aiRetryDelayMs: number;
+  /** Whether to start the web admin panel (default: false) */
+  webEnabled?: boolean;
+  /** Port for the web admin panel (default: 3000) */
+  webPort?: number;
 }

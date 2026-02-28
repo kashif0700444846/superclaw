@@ -11,6 +11,27 @@ import { NormalizedMessage } from './gateway/types';
 import { mcpManager } from './mcp/McpManager';
 
 async function main(): Promise<void> {
+  // Start web server if WEB_ENABLED=true (and not in WEB_ONLY mode)
+  const webOnly = process.env['WEB_ONLY'] === 'true';
+  const webEnabled = process.env['WEB_ENABLED'] === 'true' || webOnly;
+
+  if (webEnabled) {
+    try {
+      const { startWebServer } = await import('./web/WebServer');
+      const webPort = parseInt(process.env['WEB_PORT'] || '3000', 10);
+      await startWebServer(webPort);
+      logger.info(`Web admin panel started on port ${webPort}`);
+    } catch (err: any) {
+      logger.error('Failed to start web server', { error: err.message });
+    }
+  }
+
+  // If WEB_ONLY mode, don't start the agent
+  if (webOnly) {
+    logger.info('WEB_ONLY mode — skipping agent startup');
+    return;
+  }
+
   logger.info(`Starting ${config.agentName}...`);
 
   // Initialize the database first — must complete before any platform or brain usage

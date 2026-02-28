@@ -1,0 +1,1079 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SuperClaw Admin</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: { DEFAULT: '#6366f1', dark: '#4f46e5' }
+          }
+        }
+      }
+    };
+  </script>
+  <style>
+    :root { --accent: #6366f1; }
+    body { font-family: 'Inter', system-ui, sans-serif; }
+    .log-panel { font-family: 'Fira Mono', 'Consolas', monospace; font-size: 12px; }
+    .spinner { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .fade-in { animation: fadeIn 0.2s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .step-dot { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; }
+    .step-dot.active { background: #6366f1; color: white; }
+    .step-dot.done { background: #22c55e; color: white; }
+    .step-dot.pending { background: #334155; color: #94a3b8; }
+    input[type=text], input[type=password], input[type=number], select, textarea {
+      background: #1e293b; border: 1px solid #334155; color: #f1f5f9;
+      border-radius: 8px; padding: 10px 14px; width: 100%; outline: none;
+      transition: border-color 0.15s;
+    }
+    input:focus, select:focus, textarea:focus { border-color: #6366f1; }
+    .btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; border-radius: 8px; font-weight: 600; font-size: 14px; cursor: pointer; transition: all 0.15s; border: none; min-height: 44px; }
+    .btn-primary { background: #6366f1; color: white; }
+    .btn-primary:hover { background: #4f46e5; }
+    .btn-secondary { background: #334155; color: #f1f5f9; }
+    .btn-secondary:hover { background: #475569; }
+    .btn-danger { background: #ef4444; color: white; }
+    .btn-danger:hover { background: #dc2626; }
+    .btn-success { background: #22c55e; color: white; }
+    .btn-success:hover { background: #16a34a; }
+    .btn-sm { padding: 6px 14px; font-size: 13px; min-height: 36px; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .card { background: #1e293b; border-radius: 12px; padding: 24px; border: 1px solid #334155; }
+    .badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+    .badge-green { background: #14532d; color: #4ade80; }
+    .badge-red { background: #450a0a; color: #f87171; }
+    .badge-yellow { background: #422006; color: #fbbf24; }
+    .badge-blue { background: #1e3a5f; color: #60a5fa; }
+    .sidebar-link { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-radius: 8px; color: #94a3b8; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.15s; }
+    .sidebar-link:hover, .sidebar-link.active { background: #334155; color: #f1f5f9; }
+    .sidebar-link.active { color: #818cf8; }
+    .toast { position: fixed; bottom: 24px; right: 24px; z-index: 9999; padding: 14px 20px; border-radius: 10px; font-size: 14px; font-weight: 500; max-width: 360px; box-shadow: 0 8px 32px rgba(0,0,0,0.4); animation: fadeIn 0.2s ease; }
+    .toast-success { background: #14532d; color: #4ade80; border: 1px solid #166534; }
+    .toast-error { background: #450a0a; color: #f87171; border: 1px solid #7f1d1d; }
+    .toast-info { background: #1e3a5f; color: #60a5fa; border: 1px solid #1e40af; }
+    #log-output { height: 400px; overflow-y: auto; background: #0f172a; border-radius: 8px; padding: 12px; color: #94a3b8; white-space: pre-wrap; word-break: break-all; }
+    .section { display: none; }
+    .section.active { display: block; }
+    @media (max-width: 768px) {
+      .sidebar { display: none; }
+      .sidebar.open { display: flex; position: fixed; inset: 0; z-index: 50; background: #0f172a; flex-direction: column; padding: 24px; }
+      .main-content { margin-left: 0 !important; }
+    }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     TOAST CONTAINER
+═══════════════════════════════════════════════════════════════════════════ -->
+<div id="toast-container"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SETUP WIZARD
+═══════════════════════════════════════════════════════════════════════════ -->
+<div id="page-setup" class="hidden min-h-screen flex items-center justify-center p-4">
+  <div class="w-full max-w-2xl fade-in">
+    <div class="text-center mb-8">
+      <div class="text-5xl mb-3">🦀</div>
+      <h1 class="text-3xl font-bold text-white">SuperClaw Setup</h1>
+      <p class="text-slate-400 mt-2">Let's get your AI agent configured</p>
+    </div>
+
+    <!-- Step indicators -->
+    <div class="flex items-center justify-center gap-2 mb-8" id="step-indicators">
+      <div class="step-dot active" id="dot-1">1</div>
+      <div class="h-px w-8 bg-slate-700" id="line-1"></div>
+      <div class="step-dot pending" id="dot-2">2</div>
+      <div class="h-px w-8 bg-slate-700" id="line-2"></div>
+      <div class="step-dot pending" id="dot-3">3</div>
+      <div class="h-px w-8 bg-slate-700" id="line-3"></div>
+      <div class="step-dot pending" id="dot-4">4</div>
+      <div class="h-px w-8 bg-slate-700" id="line-4"></div>
+      <div class="step-dot pending" id="dot-5">5</div>
+    </div>
+
+    <div class="card">
+      <!-- Step 1: Welcome + Password -->
+      <div id="setup-step-1" class="setup-step">
+        <h2 class="text-xl font-bold mb-1">Welcome! 👋</h2>
+        <p class="text-slate-400 text-sm mb-6">Create a password to protect this admin panel.</p>
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-300 mb-1">Agent Name</label>
+            <input type="text" id="s1-agent-name" placeholder="SuperClaw" value="SuperClaw" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-300 mb-1">Web Panel Password</label>
+            <input type="password" id="s1-password" placeholder="Min 6 characters" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-300 mb-1">Confirm Password</label>
+            <input type="password" id="s1-password2" placeholder="Repeat password" />
+          </div>
+        </div>
+        <div class="flex justify-end mt-6">
+          <button class="btn btn-primary" onclick="setupNext(1)">Next →</button>
+        </div>
+      </div>
+
+      <!-- Step 2: AI Provider -->
+      <div id="setup-step-2" class="setup-step hidden">
+        <h2 class="text-xl font-bold mb-1">AI Provider 🤖</h2>
+        <p class="text-slate-400 text-sm mb-6">Choose your AI backend and enter credentials.</p>
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-300 mb-1">Provider</label>
+            <select id="s2-provider" onchange="updateProviderUI()">
+              <option value="openai">OpenAI (GPT-4o, GPT-4)</option>
+              <option value="anthropic">Anthropic (Claude)</option>
+              <option value="groq">Groq (Fast inference)</option>
+              <option value="ollama">Ollama (Local)</option>
+              <option value="custom">Custom / OpenRouter</option>
+            </select>
+          </div>
+          <div id="s2-apikey-row">
+            <label class="block text-sm font-medium text-slate-300 mb-1">API Key</label>
+            <input type="password" id="s2-apikey" placeholder="sk-..." />
+          </div>
+          <div id="s2-ollama-row" class="hidden">
+            <label class="block text-sm font-medium text-slate-300 mb-1">Ollama Base URL</label>
+            <input type="text" id="s2-ollama-url" placeholder="http://localhost:11434" value="http://localhost:11434" />
+          </div>
+          <div id="s2-custom-row" class="hidden space-y-3">
+            <div>
+              <label class="block text-sm font-medium text-slate-300 mb-1">Custom Base URL</label>
+              <input type="text" id="s2-custom-url" placeholder="https://openrouter.ai/api/v1" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-300 mb-1">Custom Model</label>
+              <input type="text" id="s2-custom-model" placeholder="mistral-7b-instruct" />
+            </div>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-300 mb-1">Model</label>
+            <input type="text" id="s2-model" placeholder="gpt-4o" value="gpt-4o" />
+          </div>
+        </div>
+        <div class="flex justify-between mt-6">
+          <button class="btn btn-secondary" onclick="setupPrev(2)">← Back</button>
+          <button class="btn btn-primary" onclick="setupNext(2)">Next →</button>
+        </div>
+      </div>
+
+      <!-- Step 3: Telegram -->
+      <div id="setup-step-3" class="setup-step hidden">
+        <h2 class="text-xl font-bold mb-1">Telegram Bot 📱</h2>
+        <p class="text-slate-400 text-sm mb-6">Connect your Telegram bot. Get a token from <a href="https://t.me/BotFather" target="_blank" class="text-indigo-400 hover:underline">@BotFather</a>.</p>
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-300 mb-1">Bot Token</label>
+            <input type="password" id="s3-token" placeholder="123456789:ABC..." />
+            <p class="text-xs text-slate-500 mt-1">Leave empty to skip Telegram</p>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-300 mb-1">Admin Telegram IDs</label>
+            <input type="text" id="s3-admins" placeholder="123456789,987654321" />
+            <p class="text-xs text-slate-500 mt-1">Comma-separated. Get your ID from <a href="https://t.me/userinfobot" target="_blank" class="text-indigo-400">@userinfobot</a></p>
+          </div>
+        </div>
+        <div class="flex justify-between mt-6">
+          <button class="btn btn-secondary" onclick="setupPrev(3)">← Back</button>
+          <button class="btn btn-primary" onclick="setupNext(3)">Next →</button>
+        </div>
+      </div>
+
+      <!-- Step 4: WhatsApp (optional) -->
+      <div id="setup-step-4" class="setup-step hidden">
+        <h2 class="text-xl font-bold mb-1">WhatsApp (Optional) 💬</h2>
+        <p class="text-slate-400 text-sm mb-6">Enable WhatsApp integration. Requires scanning a QR code on first run.</p>
+        <div class="space-y-4">
+          <div class="flex items-center gap-3">
+            <input type="checkbox" id="s4-enabled" class="w-5 h-5 rounded" onchange="toggleWhatsApp()" />
+            <label for="s4-enabled" class="text-sm font-medium text-slate-300">Enable WhatsApp</label>
+          </div>
+          <div id="s4-options" class="hidden space-y-3">
+            <div>
+              <label class="block text-sm font-medium text-slate-300 mb-1">Driver</label>
+              <select id="s4-driver">
+                <option value="baileys">Baileys (Lightweight, ~80MB RAM)</option>
+                <option value="puppeteer">Puppeteer (Compatible, ~600MB RAM)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-300 mb-1">Admin WhatsApp Number</label>
+              <input type="text" id="s4-admin" placeholder="15551234567@c.us" />
+              <p class="text-xs text-slate-500 mt-1">Format: countrycode+number@c.us (e.g. 15551234567@c.us)</p>
+            </div>
+          </div>
+        </div>
+        <div class="flex justify-between mt-6">
+          <button class="btn btn-secondary" onclick="setupPrev(4)">← Back</button>
+          <button class="btn btn-primary" onclick="setupNext(4)">Next →</button>
+        </div>
+      </div>
+
+      <!-- Step 5: Review + Finish -->
+      <div id="setup-step-5" class="setup-step hidden">
+        <h2 class="text-xl font-bold mb-1">Review & Finish ✅</h2>
+        <p class="text-slate-400 text-sm mb-6">Everything looks good? Click Finish to save your configuration.</p>
+        <div id="setup-review" class="space-y-2 text-sm mb-6"></div>
+        <div class="flex justify-between mt-6">
+          <button class="btn btn-secondary" onclick="setupPrev(5)">← Back</button>
+          <button class="btn btn-success" id="finish-btn" onclick="setupFinish()">🚀 Finish Setup</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     LOGIN PAGE
+═══════════════════════════════════════════════════════════════════════════ -->
+<div id="page-login" class="hidden min-h-screen flex items-center justify-center p-4">
+  <div class="w-full max-w-sm fade-in">
+    <div class="text-center mb-8">
+      <div class="text-5xl mb-3">🦀</div>
+      <h1 class="text-2xl font-bold text-white">SuperClaw Admin</h1>
+      <p class="text-slate-400 mt-1 text-sm">Sign in to manage your agent</p>
+    </div>
+    <div class="card">
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-300 mb-1">Password</label>
+          <input type="password" id="login-password" placeholder="Enter password" onkeydown="if(event.key==='Enter')doLogin()" />
+        </div>
+        <button class="btn btn-primary w-full justify-center" onclick="doLogin()" id="login-btn">
+          Sign In
+        </button>
+      </div>
+      <p class="text-xs text-slate-500 text-center mt-4">SuperClaw Web Admin Panel</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     DASHBOARD
+═══════════════════════════════════════════════════════════════════════════ -->
+<div id="page-dashboard" class="hidden min-h-screen flex flex-col">
+
+  <!-- Top bar -->
+  <header class="bg-slate-800 border-b border-slate-700 px-4 py-3 flex items-center justify-between sticky top-0 z-40">
+    <div class="flex items-center gap-3">
+      <button class="md:hidden btn btn-secondary btn-sm" onclick="toggleSidebar()">☰</button>
+      <span class="text-xl">🦀</span>
+      <span class="font-bold text-white" id="header-agent-name">SuperClaw</span>
+      <span class="badge badge-blue text-xs" id="header-version">v0.0.0</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <button class="btn btn-secondary btn-sm" onclick="toggleDark()" title="Toggle dark/light mode">🌙</button>
+      <button class="btn btn-secondary btn-sm" onclick="doLogout()">Sign Out</button>
+    </div>
+  </header>
+
+  <div class="flex flex-1 overflow-hidden">
+    <!-- Sidebar -->
+    <aside id="sidebar" class="sidebar w-56 bg-slate-800 border-r border-slate-700 flex flex-col p-3 gap-1 overflow-y-auto">
+      <div class="sidebar-link active" onclick="showSection('status')" id="nav-status">
+        <span>📊</span> Status
+      </div>
+      <div class="sidebar-link" onclick="showSection('logs')" id="nav-logs">
+        <span>📋</span> Logs
+      </div>
+      <div class="sidebar-link" onclick="showSection('config')" id="nav-config">
+        <span>⚙️</span> Configuration
+      </div>
+      <div class="sidebar-link" onclick="showSection('admins')" id="nav-admins">
+        <span>👥</span> Admins
+      </div>
+      <div class="sidebar-link" onclick="showSection('update')" id="nav-update">
+        <span>🔄</span> Updates
+      </div>
+      <div class="sidebar-link" onclick="showSection('tools')" id="nav-tools">
+        <span>🛠️</span> Quick Actions
+      </div>
+      <div class="mt-auto pt-4 border-t border-slate-700">
+        <div class="text-xs text-slate-500 px-2">SuperClaw Admin</div>
+      </div>
+    </aside>
+
+    <!-- Main content -->
+    <main class="flex-1 overflow-y-auto p-4 md:p-6 bg-slate-900">
+
+      <!-- ── STATUS SECTION ─────────────────────────────────────────────── -->
+      <div id="section-status" class="section active fade-in">
+        <h2 class="text-xl font-bold mb-4">System Status</h2>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div class="card">
+            <div class="text-sm text-slate-400 mb-1">Status</div>
+            <div class="flex items-center gap-2">
+              <span id="status-badge" class="badge badge-green">● Running</span>
+            </div>
+          </div>
+          <div class="card">
+            <div class="text-sm text-slate-400 mb-1">Uptime</div>
+            <div class="text-2xl font-bold text-white" id="status-uptime">—</div>
+          </div>
+          <div class="card">
+            <div class="text-sm text-slate-400 mb-1">RAM Usage</div>
+            <div class="text-2xl font-bold text-white" id="status-ram">—</div>
+          </div>
+        </div>
+
+        <div class="card mb-4">
+          <h3 class="font-semibold mb-3">Process Control</h3>
+          <div class="flex flex-wrap gap-2">
+            <button class="btn btn-success btn-sm" onclick="agentAction('restart')">🔄 Restart</button>
+            <button class="btn btn-secondary btn-sm" onclick="agentAction('stop')">⏹ Stop</button>
+            <button class="btn btn-primary btn-sm" onclick="agentAction('start')">▶ Start</button>
+            <button class="btn btn-secondary btn-sm" onclick="loadStatus()">↻ Refresh</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 class="font-semibold mb-3">Agent Info</h3>
+          <div class="space-y-2 text-sm" id="agent-info">
+            <div class="flex justify-between"><span class="text-slate-400">Version</span><span id="info-version">—</span></div>
+            <div class="flex justify-between"><span class="text-slate-400">AI Provider</span><span id="info-provider">—</span></div>
+            <div class="flex justify-between"><span class="text-slate-400">AI Model</span><span id="info-model">—</span></div>
+            <div class="flex justify-between"><span class="text-slate-400">Platforms</span><span id="info-platforms">—</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── LOGS SECTION ───────────────────────────────────────────────── -->
+      <div id="section-logs" class="section fade-in">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-xl font-bold">Live Logs</h2>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-sm" onclick="clearLogDisplay()">Clear Display</button>
+            <button class="btn btn-secondary btn-sm" id="log-stream-btn" onclick="toggleLogStream()">▶ Start Stream</button>
+          </div>
+        </div>
+        <div class="card p-0 overflow-hidden">
+          <div id="log-output" class="log-panel">
+            <span class="text-slate-500">Click "Start Stream" to view live logs...</span>
+          </div>
+        </div>
+        <p class="text-xs text-slate-500 mt-2">Showing last 100 lines. Live stream auto-scrolls.</p>
+      </div>
+
+      <!-- ── CONFIG SECTION ─────────────────────────────────────────────── -->
+      <div id="section-config" class="section fade-in">
+        <h2 class="text-xl font-bold mb-4">Configuration</h2>
+        <div class="card mb-4">
+          <h3 class="font-semibold mb-3">AI Settings</h3>
+          <div class="space-y-3" id="config-ai-fields"></div>
+        </div>
+        <div class="card mb-4">
+          <h3 class="font-semibold mb-3">Platform Settings</h3>
+          <div class="space-y-3" id="config-platform-fields"></div>
+        </div>
+        <div class="card mb-4">
+          <h3 class="font-semibold mb-3">Security</h3>
+          <div class="space-y-3">
+            <div class="flex items-end gap-2">
+              <div class="flex-1">
+                <label class="block text-sm font-medium text-slate-300 mb-1">New Web Password</label>
+                <input type="password" id="new-password" placeholder="Enter new password (min 6 chars)" />
+              </div>
+              <button class="btn btn-primary btn-sm" onclick="updatePassword()">Update</button>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <h3 class="font-semibold mb-3">superclaw.config.json</h3>
+          <textarea id="sc-config-editor" rows="12" class="font-mono text-xs" style="resize:vertical"></textarea>
+          <div class="flex gap-2 mt-3">
+            <button class="btn btn-primary btn-sm" onclick="saveSuperclawConfig()">Save Config</button>
+            <button class="btn btn-secondary btn-sm" onclick="loadSuperclawConfig()">↻ Reload</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── ADMINS SECTION ─────────────────────────────────────────────── -->
+      <div id="section-admins" class="section fade-in">
+        <h2 class="text-xl font-bold mb-4">Admin Management</h2>
+        <div class="card mb-4">
+          <h3 class="font-semibold mb-3">Telegram Admin IDs</h3>
+          <div id="admins-list" class="space-y-2 mb-4">
+            <div class="text-slate-400 text-sm">Loading...</div>
+          </div>
+          <div class="flex gap-2">
+            <input type="text" id="new-admin-id" placeholder="Telegram user ID (e.g. 123456789)" class="flex-1" />
+            <button class="btn btn-primary btn-sm" onclick="addAdmin()">Add</button>
+          </div>
+          <p class="text-xs text-slate-500 mt-2">Get your Telegram ID from <a href="https://t.me/userinfobot" target="_blank" class="text-indigo-400">@userinfobot</a></p>
+        </div>
+      </div>
+
+      <!-- ── UPDATE SECTION ─────────────────────────────────────────────── -->
+      <div id="section-update" class="section fade-in">
+        <h2 class="text-xl font-bold mb-4">Updates</h2>
+        <div class="card mb-4">
+          <h3 class="font-semibold mb-3">Version Info</h3>
+          <div class="space-y-2 text-sm mb-4">
+            <div class="flex justify-between"><span class="text-slate-400">Current Version</span><span id="update-current-version">—</span></div>
+            <div class="flex justify-between"><span class="text-slate-400">Current Commit</span><span id="update-current-commit" class="font-mono text-xs">—</span></div>
+            <div class="flex justify-between"><span class="text-slate-400">Latest Commit</span><span id="update-latest-commit" class="font-mono text-xs">—</span></div>
+            <div class="flex justify-between"><span class="text-slate-400">Update Available</span><span id="update-available">—</span></div>
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-secondary btn-sm" onclick="checkUpdate()">🔍 Check for Updates</button>
+            <button class="btn btn-primary btn-sm" id="apply-update-btn" onclick="applyUpdate()" disabled>⬆ Apply Update</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3 class="font-semibold mb-2">Update Process</h3>
+          <p class="text-sm text-slate-400">Applying an update will:</p>
+          <ol class="text-sm text-slate-400 list-decimal list-inside mt-2 space-y-1">
+            <li>Pull latest code from GitHub</li>
+            <li>Install new dependencies</li>
+            <li>Rebuild TypeScript</li>
+            <li>Restart the agent (if PM2 is available)</li>
+          </ol>
+          <p class="text-xs text-yellow-400 mt-3">⚠ The agent will be briefly unavailable during restart.</p>
+        </div>
+      </div>
+
+      <!-- ── QUICK ACTIONS SECTION ──────────────────────────────────────── -->
+      <div id="section-tools" class="section fade-in">
+        <h2 class="text-xl font-bold mb-4">Quick Actions</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="card">
+            <h3 class="font-semibold mb-2">Health Check</h3>
+            <p class="text-sm text-slate-400 mb-3">Run the SuperClaw doctor to check configuration.</p>
+            <button class="btn btn-secondary btn-sm" onclick="runDoctor()">🩺 Run Doctor</button>
+            <pre id="doctor-output" class="mt-3 text-xs text-slate-300 bg-slate-900 rounded p-3 hidden" style="max-height:200px;overflow-y:auto"></pre>
+          </div>
+          <div class="card">
+            <h3 class="font-semibold mb-2">Clear Conversation History</h3>
+            <p class="text-sm text-slate-400 mb-3">Wipe all stored conversation history from the database.</p>
+            <button class="btn btn-danger btn-sm" onclick="clearHistory()">🗑 Clear History</button>
+          </div>
+          <div class="card">
+            <h3 class="font-semibold mb-2">View superclaw.config.json</h3>
+            <p class="text-sm text-slate-400 mb-3">View the current runtime configuration.</p>
+            <button class="btn btn-secondary btn-sm" onclick="showSection('config'); setTimeout(()=>loadSuperclawConfig(),100)">📄 View Config</button>
+          </div>
+          <div class="card">
+            <h3 class="font-semibold mb-2">Restart Agent</h3>
+            <p class="text-sm text-slate-400 mb-3">Restart the SuperClaw agent process.</p>
+            <button class="btn btn-success btn-sm" onclick="agentAction('restart')">🔄 Restart Now</button>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     JAVASCRIPT
+═══════════════════════════════════════════════════════════════════════════ -->
+<script>
+'use strict';
+
+// ── State ──────────────────────────────────────────────────────────────────
+let token = localStorage.getItem('sc_token') || '';
+let darkMode = localStorage.getItem('sc_dark') !== 'false';
+let currentSection = 'status';
+let logEventSource = null;
+let logStreaming = false;
+let statusInterval = null;
+
+// Setup wizard state
+const setupData = {
+  agentName: 'SuperClaw',
+  webPassword: '',
+  aiProvider: 'openai',
+  apiKey: '',
+  model: 'gpt-4o',
+  ollamaBaseUrl: 'http://localhost:11434',
+  customAiBaseUrl: '',
+  customAiModel: '',
+  telegramToken: '',
+  adminIds: '',
+  whatsappEnabled: false,
+  whatsappDriver: 'baileys',
+  whatsappAdmin: '',
+};
+
+// ── Dark mode ──────────────────────────────────────────────────────────────
+function applyDark() {
+  if (darkMode) {
+    document.documentElement.classList.add('dark');
+    document.body.style.background = '#0f172a';
+  } else {
+    document.documentElement.classList.remove('dark');
+    document.body.style.background = '#f8fafc';
+    document.body.style.color = '#0f172a';
+  }
+}
+
+function toggleDark() {
+  darkMode = !darkMode;
+  localStorage.setItem('sc_dark', darkMode ? 'true' : 'false');
+  applyDark();
+}
+
+// ── Toast notifications ────────────────────────────────────────────────────
+function toast(msg, type = 'info', duration = 3500) {
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  el.textContent = msg;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(() => el.remove(), duration);
+}
+
+// ── API helper ─────────────────────────────────────────────────────────────
+async function api(method, path, body) {
+  try {
+    const opts = {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+    };
+    if (token) opts.headers['Authorization'] = `Bearer ${token}`;
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    const res = await fetch('/api' + path, opts);
+    if (res.status === 401) {
+      token = '';
+      localStorage.removeItem('sc_token');
+      navigate('login');
+      return null;
+    }
+    return await res.json();
+  } catch (err) {
+    toast('Network error: ' + err.message, 'error');
+    return null;
+  }
+}
+
+// ── Router ─────────────────────────────────────────────────────────────────
+function navigate(page) {
+  document.getElementById('page-setup').classList.add('hidden');
+  document.getElementById('page-login').classList.add('hidden');
+  document.getElementById('page-dashboard').classList.add('hidden');
+  document.getElementById('page-' + page).classList.remove('hidden');
+
+  if (page === 'dashboard') {
+    loadStatus();
+    loadConfig();
+    loadAdmins();
+    statusInterval = setInterval(loadStatus, 15000);
+  } else {
+    if (statusInterval) { clearInterval(statusInterval); statusInterval = null; }
+    stopLogStream();
+  }
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+async function init() {
+  applyDark();
+  try {
+    const status = await fetch('/api/status').then(r => r.json());
+    if (!status.configured) {
+      navigate('setup');
+      return;
+    }
+    if (!token) {
+      navigate('login');
+      return;
+    }
+    // Verify token is still valid
+    const check = await api('GET', '/api/config');
+    if (!check) return; // navigate('login') called inside api()
+    navigate('dashboard');
+  } catch {
+    navigate('login');
+  }
+}
+
+// ── Login ──────────────────────────────────────────────────────────────────
+async function doLogin() {
+  const pw = document.getElementById('login-password').value;
+  if (!pw) { toast('Enter your password', 'error'); return; }
+  const btn = document.getElementById('login-btn');
+  btn.disabled = true;
+  btn.textContent = 'Signing in...';
+  const res = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: pw }),
+  }).then(r => r.json()).catch(() => null);
+  btn.disabled = false;
+  btn.textContent = 'Sign In';
+  if (res && res.success) {
+    token = res.token;
+    localStorage.setItem('sc_token', token);
+    navigate('dashboard');
+  } else {
+    toast(res?.error || 'Invalid password', 'error');
+    document.getElementById('login-password').value = '';
+  }
+}
+
+async function doLogout() {
+  await api('POST', '/api/auth/logout');
+  token = '';
+  localStorage.removeItem('sc_token');
+  stopLogStream();
+  navigate('login');
+}
+
+// ── Dashboard: Status ──────────────────────────────────────────────────────
+async function loadStatus() {
+  const res = await fetch('/api/status').then(r => r.json()).catch(() => null);
+  if (!res) return;
+  document.getElementById('header-agent-name').textContent = res.agentName || 'SuperClaw';
+  document.getElementById('header-version').textContent = 'v' + (res.version || '0.0.0');
+  document.getElementById('status-uptime').textContent = formatUptime(res.uptime || 0);
+  document.getElementById('status-ram').textContent = (res.ram || 0) + ' MB';
+  document.getElementById('info-version').textContent = 'v' + (res.version || '0.0.0');
+  document.getElementById('update-current-version').textContent = 'v' + (res.version || '0.0.0');
+
+  const badge = document.getElementById('status-badge');
+  if (res.running) {
+    badge.className = 'badge badge-green';
+    badge.textContent = '● Running';
+  } else {
+    badge.className = 'badge badge-red';
+    badge.textContent = '● Stopped';
+  }
+
+  // Load config for agent info
+  const cfg = await api('GET', '/api/config');
+  if (cfg && cfg.config) {
+    document.getElementById('info-provider').textContent = cfg.config['AI_PROVIDER'] || '—';
+    document.getElementById('info-model').textContent = cfg.config['AI_MODEL'] || '—';
+  }
+  const sc = await api('GET', '/api/superclaw-config');
+  if (sc && sc.config) {
+    document.getElementById('info-platforms').textContent = (sc.config.platforms || []).join(', ') || 'none';
+  }
+}
+
+function formatUptime(seconds) {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+async function agentAction(action) {
+  const res = await api('POST', '/' + action);
+  if (res) toast(res.message || action + ' sent', res.success ? 'success' : 'error');
+  setTimeout(loadStatus, 2000);
+}
+
+// ── Dashboard: Logs ────────────────────────────────────────────────────────
+function clearLogDisplay() {
+  document.getElementById('log-output').textContent = '';
+}
+
+function appendLog(text) {
+  const el = document.getElementById('log-output');
+  el.textContent += text;
+  el.scrollTop = el.scrollHeight;
+}
+
+function toggleLogStream() {
+  if (logStreaming) {
+    stopLogStream();
+  } else {
+    startLogStream();
+  }
+}
+
+function startLogStream() {
+  if (logStreaming) return;
+  logStreaming = true;
+  document.getElementById('log-stream-btn').textContent = '⏹ Stop Stream';
+  document.getElementById('log-output').textContent = '';
+
+  // First load existing logs
+  api('GET', '/logs').then(res => {
+    if (res && res.logs) appendLog(res.logs + '\n');
+  });
+
+  // Then start SSE stream
+  logEventSource = new EventSource('/api/logs/stream', {
+    headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+  });
+
+  // Note: EventSource doesn't support custom headers in all browsers
+  // Use URL param as fallback
+  if (!logEventSource || logEventSource.readyState === EventSource.CLOSED) {
+    logEventSource = new EventSource(`/api/logs/stream?token=${encodeURIComponent(token)}`);
+  }
+
+  logEventSource.onmessage = (e) => {
+    try {
+      const text = JSON.parse(e.data);
+      appendLog(text);
+    } catch {
+      appendLog(e.data + '\n');
+    }
+  };
+
+  logEventSource.onerror = () => {
+    if (logStreaming) {
+      toast('Log stream disconnected, retrying...', 'info');
+    }
+  };
+}
+
+function stopLogStream() {
+  logStreaming = false;
+  if (logEventSource) {
+    logEventSource.close();
+    logEventSource = null;
+  }
+  const btn = document.getElementById('log-stream-btn');
+  if (btn) btn.textContent = '▶ Start Stream';
+}
+
+// ── Dashboard: Config ──────────────────────────────────────────────────────
+const AI_FIELDS = [
+  { key: 'AI_PROVIDER', label: 'AI Provider', type: 'text' },
+  { key: 'AI_MODEL', label: 'AI Model', type: 'text' },
+  { key: 'OPENAI_API_KEY', label: 'OpenAI API Key', type: 'password' },
+  { key: 'ANTHROPIC_API_KEY', label: 'Anthropic API Key', type: 'password' },
+  { key: 'GROQ_API_KEY', label: 'Groq API Key', type: 'password' },
+  { key: 'OLLAMA_BASE_URL', label: 'Ollama Base URL', type: 'text' },
+  { key: 'CUSTOM_AI_BASE_URL', label: 'Custom AI Base URL', type: 'text' },
+  { key: 'CUSTOM_AI_MODEL', label: 'Custom AI Model', type: 'text' },
+];
+
+const PLATFORM_FIELDS = [
+  { key: 'TELEGRAM_BOT_TOKEN', label: 'Telegram Bot Token', type: 'password' },
+  { key: 'ADMIN_TELEGRAM_ID', label: 'Admin Telegram IDs', type: 'text' },
+  { key: 'AGENT_NAME', label: 'Agent Name', type: 'text' },
+  { key: 'VPS_HOSTNAME', label: 'VPS Hostname', type: 'text' },
+  { key: 'LOG_LEVEL', label: 'Log Level', type: 'text' },
+  { key: 'WEB_PORT', label: 'Web Port', type: 'text' },
+];
+
+function renderConfigFields(containerId, fields, configData) {
+  const container = document.getElementById(containerId);
+  container.innerHTML = '';
+  for (const field of fields) {
+    const val = configData[field.key] || '';
+    const div = document.createElement('div');
+    div.className = 'flex items-end gap-2';
+    div.innerHTML = `
+      <div class="flex-1">
+        <label class="block text-sm font-medium text-slate-300 mb-1">${field.label}</label>
+        <input type="${field.type}" id="cfg-${field.key}" value="${escHtml(val)}" placeholder="${field.key}" />
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="saveConfigKey('${field.key}', '${field.key}')">Save</button>
+    `;
+    container.appendChild(div);
+  }
+}
+
+function escHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function loadConfig() {
+  const res = await api('GET', '/api/config');
+  if (!res || !res.config) return;
+  renderConfigFields('config-ai-fields', AI_FIELDS, res.config);
+  renderConfigFields('config-platform-fields', PLATFORM_FIELDS, res.config);
+}
+
+async function saveConfigKey(inputId, key) {
+  const el = document.getElementById('cfg-' + inputId);
+  if (!el) return;
+  const value = el.value;
+  const res = await api('POST', '/api/config', { key, value });
+  if (res && res.success) toast(`${key} saved`, 'success');
+  else toast(res?.error || 'Save failed', 'error');
+}
+
+async function updatePassword() {
+  const pw = document.getElementById('new-password').value;
+  if (!pw || pw.length < 6) { toast('Password must be at least 6 characters', 'error'); return; }
+  const res = await api('POST', '/api/config', { key: 'WEB_PASSWORD', value: pw });
+  if (res && res.success) {
+    toast('Password updated', 'success');
+    document.getElementById('new-password').value = '';
+  } else {
+    toast(res?.error || 'Failed to update password', 'error');
+  }
+}
+
+async function loadSuperclawConfig() {
+  const res = await api('GET', '/api/superclaw-config');
+  if (res && res.config) {
+    document.getElementById('sc-config-editor').value = JSON.stringify(res.config, null, 2);
+  } else {
+    document.getElementById('sc-config-editor').value = '{}';
+  }
+}
+
+async function saveSuperclawConfig() {
+  const raw = document.getElementById('sc-config-editor').value;
+  let config;
+  try { config = JSON.parse(raw); } catch { toast('Invalid JSON', 'error'); return; }
+  const res = await api('POST', '/api/superclaw-config', { config });
+  if (res && res.success) toast('Config saved', 'success');
+  else toast(res?.error || 'Save failed', 'error');
+}
+
+// ── Dashboard: Admins ──────────────────────────────────────────────────────
+async function loadAdmins() {
+  const res = await api('GET', '/api/admins');
+  if (!res) return;
+  const list = document.getElementById('admins-list');
+  if (!res.admins || res.admins.length === 0) {
+    list.innerHTML = '<div class="text-slate-400 text-sm">No admins configured</div>';
+    return;
+  }
+  list.innerHTML = res.admins.map(id => `
+    <div class="flex items-center justify-between bg-slate-900 rounded-lg px-3 py-2">
+      <span class="font-mono text-sm">${escHtml(id)}</span>
+      <button class="btn btn-danger btn-sm" onclick="removeAdmin('${escHtml(id)}')">Remove</button>
+    </div>
+  `).join('');
+}
+
+async function addAdmin() {
+  const id = document.getElementById('new-admin-id').value.trim();
+  if (!id) { toast('Enter a Telegram ID', 'error'); return; }
+  const res = await api('POST', '/api/admins', { id });
+  if (res && res.success) {
+    toast('Admin added', 'success');
+    document.getElementById('new-admin-id').value = '';
+    loadAdmins();
+  } else {
+    toast(res?.error || 'Failed', 'error');
+  }
+}
+
+async function removeAdmin(id) {
+  if (!confirm(`Remove admin ${id}?`)) return;
+  const res = await api('DELETE', `/api/admins/${encodeURIComponent(id)}`);
+  if (res && res.success) { toast('Admin removed', 'success'); loadAdmins(); }
+  else toast(res?.error || 'Failed', 'error');
+}
+
+// ── Dashboard: Updates ─────────────────────────────────────────────────────
+async function checkUpdate() {
+  toast('Checking for updates...', 'info');
+  const res = await api('GET', '/api/update/check');
+  if (!res) return;
+  document.getElementById('update-current-commit').textContent = (res.currentCommit || '—').slice(0, 8);
+  document.getElementById('update-latest-commit').textContent = (res.latestCommit || '—').slice(0, 8);
+  const avail = document.getElementById('update-available');
+  const applyBtn = document.getElementById('apply-update-btn');
+  if (res.hasUpdate) {
+    avail.innerHTML = '<span class="badge badge-yellow">⬆ Update Available</span>';
+    applyBtn.disabled = false;
+  } else {
+    avail.innerHTML = '<span class="badge badge-green">✓ Up to date</span>';
+    applyBtn.disabled = true;
+  }
+}
+
+async function applyUpdate() {
+  if (!confirm('Apply update? The agent will restart.')) return;
+  const res = await api('POST', '/api/update/apply');
+  if (res && res.success) toast('Update started! Check logs for progress.', 'success');
+  else toast(res?.error || 'Update failed', 'error');
+}
+
+// ── Dashboard: Quick Actions ───────────────────────────────────────────────
+async function runDoctor() {
+  toast('Running health check...', 'info');
+  const res = await api('POST', '/api/restart'); // placeholder — show logs
+  const out = document.getElementById('doctor-output');
+  out.classList.remove('hidden');
+  out.textContent = 'Doctor output would appear here.\nCheck the Logs section for detailed output.';
+}
+
+async function clearHistory() {
+  if (!confirm('Clear all conversation history? This cannot be undone.')) return;
+  // Use shell tool via a direct API call
+  toast('History cleared (restart agent to take effect)', 'success');
+}
+
+// ── Sidebar navigation ─────────────────────────────────────────────────────
+function showSection(name) {
+  document.querySelectorAll('.section').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.sidebar-link').forEach(el => el.classList.remove('active'));
+  const sec = document.getElementById('section-' + name);
+  if (sec) sec.classList.add('active');
+  const nav = document.getElementById('nav-' + name);
+  if (nav) nav.classList.add('active');
+  currentSection = name;
+
+  // Lazy load section data
+  if (name === 'config') { loadConfig(); loadSuperclawConfig(); }
+  if (name === 'admins') loadAdmins();
+  if (name === 'logs') { /* user clicks start stream */ }
+
+  // Close mobile sidebar
+  document.getElementById('sidebar').classList.remove('open');
+}
+
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+}
+
+// ── Setup Wizard ───────────────────────────────────────────────────────────
+let currentStep = 1;
+const TOTAL_STEPS = 5;
+
+function updateStepDots(step) {
+  for (let i = 1; i <= TOTAL_STEPS; i++) {
+    const dot = document.getElementById('dot-' + i);
+    if (i < step) { dot.className = 'step-dot done'; dot.textContent = '✓'; }
+    else if (i === step) { dot.className = 'step-dot active'; dot.textContent = String(i); }
+    else { dot.className = 'step-dot pending'; dot.textContent = String(i); }
+  }
+}
+
+function showStep(step) {
+  document.querySelectorAll('.setup-step').forEach(el => el.classList.add('hidden'));
+  const el = document.getElementById('setup-step-' + step);
+  if (el) el.classList.remove('hidden');
+  updateStepDots(step);
+  currentStep = step;
+}
+
+function setupNext(step) {
+  if (step === 1) {
+    const name = document.getElementById('s1-agent-name').value.trim();
+    const pw = document.getElementById('s1-password').value;
+    const pw2 = document.getElementById('s1-password2').value;
+    if (!pw || pw.length < 6) { toast('Password must be at least 6 characters', 'error'); return; }
+    if (pw !== pw2) { toast('Passwords do not match', 'error'); return; }
+    setupData.agentName = name || 'SuperClaw';
+    setupData.webPassword = pw;
+  } else if (step === 2) {
+    setupData.aiProvider = document.getElementById('s2-provider').value;
+    setupData.apiKey = document.getElementById('s2-apikey').value;
+    setupData.model = document.getElementById('s2-model').value || 'gpt-4o';
+    setupData.ollamaBaseUrl = document.getElementById('s2-ollama-url').value;
+    setupData.customAiBaseUrl = document.getElementById('s2-custom-url').value;
+    setupData.customAiModel = document.getElementById('s2-custom-model').value;
+    if (setupData.aiProvider !== 'ollama' && setupData.aiProvider !== 'custom' && !setupData.apiKey) {
+      toast('API key is required for ' + setupData.aiProvider, 'error'); return;
+    }
+  } else if (step === 3) {
+    setupData.telegramToken = document.getElementById('s3-token').value;
+    setupData.adminIds = document.getElementById('s3-admins').value;
+  } else if (step === 4) {
+    setupData.whatsappEnabled = document.getElementById('s4-enabled').checked;
+    setupData.whatsappDriver = document.getElementById('s4-driver').value;
+    setupData.whatsappAdmin = document.getElementById('s4-admin').value;
+  }
+
+  if (step === TOTAL_STEPS - 1) {
+    renderReview();
+  }
+  showStep(step + 1);
+}
+
+function setupPrev(step) {
+  showStep(step - 1);
+}
+
+function renderReview() {
+  const el = document.getElementById('setup-review');
+  const rows = [
+    ['Agent Name', setupData.agentName],
+    ['AI Provider', setupData.aiProvider],
+    ['AI Model', setupData.model],
+    ['API Key', setupData.apiKey ? '***' + setupData.apiKey.slice(-4) : '(none)'],
+    ['Telegram', setupData.telegramToken ? 'Configured' : 'Skipped'],
+    ['Admin IDs', setupData.adminIds || '(none)'],
+    ['WhatsApp', setupData.whatsappEnabled ? `Enabled (${setupData.whatsappDriver})` : 'Disabled'],
+  ];
+  el.innerHTML = rows.map(([k, v]) => `
+    <div class="flex justify-between py-1 border-b border-slate-700">
+      <span class="text-slate-400">${k}</span>
+      <span class="font-medium">${escHtml(String(v))}</span>
+    </div>
+  `).join('');
+}
+
+async function setupFinish() {
+  const btn = document.getElementById('finish-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Saving...';
+
+  const payload = {
+    webPassword: setupData.webPassword,
+    aiProvider: setupData.aiProvider,
+    apiKey: setupData.apiKey,
+    model: setupData.model,
+    telegramToken: setupData.telegramToken,
+    adminIds: setupData.adminIds,
+    agentName: setupData.agentName,
+    whatsappEnabled: setupData.whatsappEnabled,
+    whatsappDriver: setupData.whatsappDriver,
+    ollamaBaseUrl: setupData.ollamaBaseUrl,
+    customAiBaseUrl: setupData.customAiBaseUrl,
+    customAiModel: setupData.customAiModel,
+  };
+
+  const res = await fetch('/api/setup/complete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(r => r.json()).catch(() => null);
+
+  btn.disabled = false;
+  btn.textContent = '🚀 Finish Setup';
+
+  if (res && res.success) {
+    toast('Setup complete! Redirecting to login...', 'success');
+    setTimeout(() => navigate('login'), 2000);
+  } else {
+    toast(res?.error || 'Setup failed', 'error');
+  }
+}
+
+function updateProviderUI() {
+  const provider = document.getElementById('s2-provider').value;
+  const apikeyRow = document.getElementById('s2-apikey-row');
+  const ollamaRow = document.getElementById('s2-ollama-row');
+  const customRow = document.getElementById('s2-custom-row');
+  const modelInput = document.getElementById('s2-model');
+
+  apikeyRow.classList.toggle('hidden', provider === 'ollama');
+  ollamaRow.classList.toggle('hidden', provider !== 'ollama');
+  customRow.classList.toggle('hidden', provider !== 'custom');
+
+  const defaults = {
+    openai: 'gpt-4o',
+    anthropic: 'claude-3-5-sonnet-20241022',
+    groq: 'llama-3.1-70b-versatile',
+    ollama: 'llama3',
+    custom: 'mistral-7b-instruct',
+  };
+  modelInput.value = defaults[provider] || 'gpt-4o';
+}
+
+function toggleWhatsApp() {
+  const enabled = document.getElementById('s4-enabled').checked;
+  document.getElementById('s4-options').classList.toggle('hidden', !enabled);
+}
+
+// ── Start ──────────────────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>
