@@ -143,14 +143,44 @@ export class TelegramPlatform {
     });
   }
 
+  /**
+   * Build the effective list of authorized admin Telegram IDs.
+   * Prefers the parsed number[] array; falls back to parsing the legacy string field.
+   * Always returns a non-empty array when any admin is configured.
+   */
+  private getAdminIds(): number[] {
+    if (config.adminTelegramIds && config.adminTelegramIds.length > 0) {
+      return config.adminTelegramIds;
+    }
+    // Legacy fallback: parse adminTelegramId string (may be comma-separated)
+    if (config.adminTelegramId) {
+      const parsed = String(config.adminTelegramId)
+        .replace(/\r/g, '')
+        .split(',')
+        .map((id) => parseInt(id.trim(), 10))
+        .filter((id) => !isNaN(id) && id > 0);
+      if (parsed.length > 0) return parsed;
+    }
+    return [];
+  }
+
   private setupHandlers(): void {
-    // Middleware: auth check for every message
+    // Log configured admin IDs at startup so auth issues are immediately visible
+    const startupAdminIds = this.getAdminIds();
+    logger.info(`TelegramPlatform: authorized admin IDs: [${startupAdminIds.join(', ')}]`);
+    if (startupAdminIds.length === 0) {
+      logger.warn('TelegramPlatform: NO admin IDs configured — all users will be rejected! Set ADMIN_TELEGRAM_ID in .env');
+    }
+
+    // Middleware: auth check for every update (messages, callbacks, etc.)
     this.bot.use(async (ctx, next) => {
-      const userId = ctx.from?.id;
-      const adminIds = config.adminTelegramIds.length > 0
-        ? config.adminTelegramIds
-        : [parseInt(config.adminTelegramId, 10)];
-      if (!userId || !adminIds.includes(userId)) {
+      const userId = ctx.from?.id; // number from Telegram API
+      const adminIds = this.getAdminIds();
+
+      // Debug log — remove after confirming fix
+      console.log(`[Auth] Telegram update from userId=${userId}, adminIds=[${adminIds.join(', ')}], authorized=${!!userId && adminIds.includes(userId)}`);
+
+      if (!userId || adminIds.length === 0 || !adminIds.includes(userId)) {
         await ctx.reply('Unauthorized. This is a private agent.');
         return;
       }
@@ -331,12 +361,12 @@ export class TelegramPlatform {
     });
 
     // Handle callback queries (Yes/No confirmation buttons + API recovery buttons)
+    // Note: the top-level middleware already rejects unauthorized users before this runs.
+    // The extra check here is kept as defence-in-depth.
     this.bot.on('callback_query:data', async (ctx) => {
       const userId = ctx.from?.id;
-      const adminIds = config.adminTelegramIds.length > 0
-        ? config.adminTelegramIds
-        : [parseInt(config.adminTelegramId, 10)];
-      if (!userId || !adminIds.includes(userId)) {
+      const adminIds = this.getAdminIds();
+      if (!userId || adminIds.length === 0 || !adminIds.includes(userId)) {
         await ctx.answerCallbackQuery({ text: 'Unauthorized.' });
         return;
       }
@@ -531,9 +561,7 @@ export class TelegramPlatform {
         `Ready for commands. Type /help for available commands.`;
 
       // Send startup message to all configured admin IDs
-      const adminIds = config.adminTelegramIds.length > 0
-        ? config.adminTelegramIds
-        : [parseInt(config.adminTelegramId, 10)];
+      const adminIds = this.getAdminIds();
       for (const adminId of adminIds) {
         await safeSendMessage(this.bot, String(adminId), message);
       }

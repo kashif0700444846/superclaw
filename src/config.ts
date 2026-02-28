@@ -60,21 +60,31 @@ function buildFallbackModels(): FallbackModel[] {
 
 const provider = validateProvider(optionalEnv('AI_PROVIDER', 'openai'));
 
-// Parse comma-separated Telegram admin IDs
-const adminTelegramIdRaw = optionalEnv('ADMIN_TELEGRAM_ID', '');
-const adminTelegramIds = adminTelegramIdRaw
+// Parse comma-separated Telegram admin IDs — robust against CRLF line endings,
+// extra whitespace, empty entries, and non-numeric values.
+const adminTelegramIdRaw = (process.env.ADMIN_TELEGRAM_ID || '').replace(/\r/g, '').trim();
+const adminTelegramIds: number[] = adminTelegramIdRaw
   .split(',')
-  .map((id) => parseInt(id.trim(), 10))
-  .filter((id) => !isNaN(id));
-const adminTelegramId = adminTelegramIds[0] || 0; // first ID for backward compat
+  .map((id) => id.trim())
+  .filter((id) => id.length > 0)
+  .map((id) => parseInt(id, 10))
+  .filter((id) => !isNaN(id) && id > 0);
 
-// Parse comma-separated WhatsApp admin numbers
+// Log parsed IDs at startup so auth issues are immediately visible in logs
+console.log(`[Config] Parsed ADMIN_TELEGRAM_ID="${adminTelegramIdRaw}" → adminTelegramIds=[${adminTelegramIds.join(', ')}]`);
+
+const adminTelegramId = adminTelegramIds.length > 0 ? String(adminTelegramIds[0]) : ''; // first ID for backward compat
+
+// Parse comma-separated WhatsApp admin numbers — robust against CRLF line endings.
 // ADMIN_WHATSAPP_NUMBERS (plural) takes precedence; falls back to ADMIN_WHATSAPP_NUMBER (singular)
-const adminWhatsappNumbers = (optionalEnv('ADMIN_WHATSAPP_NUMBERS') || optionalEnv('ADMIN_WHATSAPP_NUMBER', 'DISABLED'))
+const adminWhatsappNumbers = ((process.env.ADMIN_WHATSAPP_NUMBERS || process.env.ADMIN_WHATSAPP_NUMBER || 'DISABLED')
+  .replace(/\r/g, ''))
   .split(',')
   .map((n) => n.trim())
   .filter((n) => n.length > 0);
 const adminWhatsappNumber = adminWhatsappNumbers[0] || 'DISABLED'; // first number for backward compat
+
+console.log(`[Config] Parsed adminWhatsappNumbers=[${adminWhatsappNumbers.join(', ')}]`);
 
 export const config: AgentConfig = {
   agentName: optionalEnv('AGENT_NAME', 'SuperClaw'),

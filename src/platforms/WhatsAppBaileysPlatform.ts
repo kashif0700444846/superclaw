@@ -131,12 +131,19 @@ export class WhatsAppBaileysPlatform {
 
         const from: string = msg.key.remoteJid || '';
 
-        // Auth check — support multiple admin numbers
-        const adminJids = (config.adminWhatsappNumbers.length > 0
+        // Auth check — support multiple admin numbers.
+        // Build effective admin list: prefer the parsed array, fall back to legacy single string.
+        const effectiveAdminNumbers = config.adminWhatsappNumbers.length > 0
           ? config.adminWhatsappNumbers
-          : [config.adminWhatsappNumber]
-        ).map(toJid);
-        if (!adminJids.includes(from)) {
+          : [config.adminWhatsappNumber];
+        const adminJids = effectiveAdminNumbers
+          .map((n) => n.replace(/\r/g, '').trim())
+          .filter((n) => n.length > 0 && n !== 'DISABLED')
+          .map(toJid);
+
+        console.log(`[Auth] WhatsApp message from ${from}, adminJids=[${adminJids.join(', ')}], authorized=${adminJids.includes(from)}`);
+
+        if (adminJids.length === 0 || !adminJids.includes(from)) {
           await this.sock?.sendMessage(from, { text: 'Unauthorized.' });
           continue;
         }
@@ -256,7 +263,6 @@ export class WhatsAppBaileysPlatform {
           if (!addr.internal && addr.family === 'IPv4') ips.push(addr.address);
         }
       }
-      const jid = toJid(config.adminWhatsappNumber);
       const message =
         `${config.agentName} Online (Baileys — lightweight mode)\n\n` +
         `Time: ${new Date().toISOString()}\n` +
@@ -264,7 +270,16 @@ export class WhatsAppBaileysPlatform {
         `AI Model: ${config.aiModel}\n` +
         `Platform: WhatsApp (Baileys, no Chromium)\n\n` +
         `Ready for commands. Send !help for available commands.`;
-      await this.sock.sendMessage(jid, { text: message });
+
+      // Send to all configured admin numbers
+      const effectiveAdminNumbers = config.adminWhatsappNumbers.length > 0
+        ? config.adminWhatsappNumbers
+        : [config.adminWhatsappNumber];
+      for (const num of effectiveAdminNumbers) {
+        const cleaned = num.replace(/\r/g, '').trim();
+        if (!cleaned || cleaned === 'DISABLED') continue;
+        await this.sock.sendMessage(toJid(cleaned), { text: message });
+      }
     } catch (error: any) {
       logger.warn('Failed to send WhatsApp startup message', { error: error.message });
     }
