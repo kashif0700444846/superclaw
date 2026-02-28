@@ -5,6 +5,8 @@ import { promptBuilder } from './PromptBuilder';
 import { functionCaller } from './FunctionCaller';
 import { config } from '../config';
 import { logger } from '../logger';
+import { gateway } from '../gateway/Gateway';
+import { agentOrchestrator } from '../agents/AgentOrchestrator';
 
 export class Brain {
   async process(message: NormalizedMessage): Promise<NormalizedResponse[]> {
@@ -25,7 +27,19 @@ export class Brain {
       // STEP 3: Build system prompt
       const systemPrompt = promptBuilder.buildSystemPrompt(platform, userId);
 
-      // STEP 4: Run AI decision loop
+      // STEP 4: Wire orchestrator to push sub-agent progress to this user/chat
+      agentOrchestrator.setNotifyCallback((text: string) => {
+        gateway.sendResponse({
+          platform,
+          chatId,
+          text,
+          parseMode: platform === 'telegram' ? 'Markdown' : 'plain',
+        }).catch((err) => {
+          logger.warn('Brain: failed to send sub-agent notification', { err });
+        });
+      });
+
+      // STEP 5: Run AI decision loop
       const result = await functionCaller.run(
         systemPrompt,
         history,
@@ -35,7 +49,7 @@ export class Brain {
         userId
       );
 
-      // STEP 5: Save conversation to DB
+      // STEP 6: Save conversation to DB
       conversationDB.addMessage(userId, platform, {
         role: 'user',
         content: text,
@@ -45,7 +59,7 @@ export class Brain {
         content: result.response,
       });
 
-      // STEP 6: Auto-log to memory
+      // STEP 7: Auto-log to memory
       const summary = text.length > 100 ? text.substring(0, 100) + '...' : text;
       const outcome =
         result.toolsUsed.length > 0
@@ -53,7 +67,7 @@ export class Brain {
           : 'Text response';
       memoryManager.appendTodayLog(platform, summary, outcome);
 
-      // STEP 7: Format and return response
+      // STEP 8: Format and return response
       const parseMode = platform === 'telegram' ? 'Markdown' : 'plain';
       return [
         {

@@ -79,6 +79,14 @@ export class Gateway extends EventEmitter {
     }
   }
 
+  /**
+   * Proactively send a message to a user without waiting for a request.
+   * Used by AgentOrchestrator to push sub-agent progress notifications.
+   */
+  async sendMessage(response: NormalizedResponse): Promise<void> {
+    return this.sendResponse(response);
+  }
+
   async requestConfirmation(
     platform: Platform,
     chatId: string,

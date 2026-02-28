@@ -119,6 +119,13 @@ The Puppeteer-based WhatsApp option is still available if you need it, but Baile
 
 ## Changelog
 
+### v2.5.0 (2026-02-28)
+- Added real sub-agent system: SuperClaw can now spawn parallel child processes with different AI models
+- New tools: spawn_agent, check_agent, list_agents, kill_agent
+- Sub-agents run as real Node.js child processes via fork()
+- Max 5 concurrent sub-agents, 10-minute timeout, automatic cleanup
+- Progress notifications sent to user in real-time via Telegram/WhatsApp
+
 ### v2.4.0 (2026-02-28)
 - Fixed wizard writing trailing quotes into .env values (caused invalid Telegram token)
 - All env values are now sanitized before being written to .env

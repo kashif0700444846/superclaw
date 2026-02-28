@@ -75,4 +75,5 @@ export interface AgentConfig {
   maxMessagesPerMinute: number;
   maxAiCallsPerMinute: number;
   maxConcurrentTools: number;
+  maxConcurrentAgents: number;
 }

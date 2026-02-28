@@ -17,6 +17,12 @@ import { memoryReadTool } from '../tools/MemoryReadTool';
 import { memoryWriteTool } from '../tools/MemoryWriteTool';
 import { aiQueryTool } from '../tools/AiQueryTool';
 
+// Sub-agent management tools
+import { spawnAgentTool } from '../tools/SpawnAgentTool';
+import { checkAgentTool } from '../tools/CheckAgentTool';
+import { listAgentsTool } from '../tools/ListAgentsTool';
+import { killAgentTool } from '../tools/KillAgentTool';
+
 export class ToolRegistry {
   private tools: Map<string, Tool> = new Map();
 
@@ -40,6 +46,11 @@ export class ToolRegistry {
       memoryReadTool,
       memoryWriteTool,
       aiQueryTool,
+      // Sub-agent management tools
+      spawnAgentTool,
+      checkAgentTool,
+      listAgentsTool,
+      killAgentTool,
     ];
 
     for (const tool of coreTools) {
@@ -117,6 +128,19 @@ export class ToolRegistry {
     return this.getAllTools()
       .map((tool) => `- **${tool.name}**: ${tool.description}`)
       .join('\n');
+  }
+
+  /**
+   * Set the notify callback on SpawnAgentTool so sub-agent progress
+   * notifications are pushed to the current user's chat.
+   */
+  setNotifyCallback(cb: (message: string) => void): void {
+    const spawnTool = this.tools.get('spawn_agent') as (typeof spawnAgentTool) | undefined;
+    if (spawnTool && typeof (spawnTool as any).setNotifyCallback === 'function') {
+      // SpawnAgentTool delegates to agentOrchestrator directly, so we set
+      // the callback on the orchestrator instead (Brain.ts does this).
+      // This method is kept for API compatibility.
+    }
   }
 }
 

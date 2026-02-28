@@ -48,6 +48,7 @@ export const config: AgentConfig = {
   maxMessagesPerMinute: parseInt(optionalEnv('MAX_MESSAGES_PER_MINUTE', '30')),
   maxAiCallsPerMinute: parseInt(optionalEnv('MAX_AI_CALLS_PER_MINUTE', '10')),
   maxConcurrentTools: parseInt(optionalEnv('MAX_CONCURRENT_TOOLS', '5')),
+  maxConcurrentAgents: parseInt(optionalEnv('MAX_CONCURRENT_AGENTS', '5')),
 };
 
 export default config;
